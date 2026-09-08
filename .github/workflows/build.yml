@@ -19,9 +19,15 @@ jobs:
           export THEOS=$HOME/theos
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
 
-      - name: Download iOS SDK
+      - name: Install Theos
         run: |
-          git clone --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
+          export THEOS=$HOME/theos
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
+
+      - name: Build RootHide package
+        run: |
+          export THEOS=$HOME/theos
+          make clean package FINALPACKAGE=1
 
       - name: Build RootHide package
         run: |
