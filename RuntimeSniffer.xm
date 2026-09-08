@@ -3,12 +3,15 @@
 #import <notify.h>
 
 static IMP gOrigMethodCallInit = NULL;
-static int gNotifyToken = 0;
+static int gPublishToken = 0;
+
+#pragma mark - LOG
 
 static NSString *VMLLogPath(void) {
-    return [[NSHomeDirectory()
-        stringByAppendingPathComponent:@"Documents"]
-        stringByAppendingPathComponent:@"VMLRuntime.txt"];
+    NSString *documents =
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+
+    return [documents stringByAppendingPathComponent:@"VMLRuntime.txt"];
 }
 
 static void VMLLog(NSString *format, ...) {
@@ -29,19 +32,30 @@ static void VMLLog(NSString *format, ...) {
         [NSFileHandle fileHandleForWritingAtPath:path];
 
     if (!fh) {
+        NSError *error = nil;
+
         [line writeToFile:path
                atomically:YES
                  encoding:NSUTF8StringEncoding
-                    error:nil];
+                    error:&error];
+
+        if (error) {
+            NSLog(@"[VMLV4] WRITE ERROR %@", error);
+        }
     } else {
         [fh seekToEndOfFile];
-        [fh writeData:
-            [line dataUsingEncoding:NSUTF8StringEncoding]];
+
+        NSData *data =
+            [line dataUsingEncoding:NSUTF8StringEncoding];
+
+        [fh writeData:data];
         [fh closeFile];
     }
 
     NSLog(@"[VMLV4] %@", msg);
 }
+
+#pragma mark - SPEED
 
 static NSInteger VMLSpeedFromObject(id obj) {
     if (!obj)
@@ -55,10 +69,12 @@ static NSInteger VMLSpeedFromObject(id obj) {
 }
 
 static void VMLPublishSpeed(NSInteger speed) {
-    if (speed < 0 || speed > 200)
+    if (speed < 0 || speed > 200) {
+        VMLLog(@"IGNORE invalid speed=%ld", (long)speed);
         return;
+    }
 
-    if (gNotifyToken == 0) {
+    if (gPublishToken == 0) {
         int token = 0;
 
         uint32_t status =
@@ -67,37 +83,42 @@ static void VMLPublishSpeed(NSInteger speed) {
                 &token
             );
 
-        if (status == NOTIFY_STATUS_OK) {
-            gNotifyToken = token;
-        } else {
+        if (status != NOTIFY_STATUS_OK) {
             VMLLog(
                 @"notify_register_check failed=%u",
                 status
             );
-
             return;
         }
+
+        gPublishToken = token;
     }
 
-    notify_set_state(
-        gNotifyToken,
-        (uint64_t)speed
-    );
+    uint32_t stateStatus =
+        notify_set_state(
+            gPublishToken,
+            (uint64_t)speed
+        );
 
-    notify_post(
-        "com.sushibta.vmlspeedbubble.speed"
-    );
+    uint32_t postStatus =
+        notify_post(
+            "com.sushibta.vmlspeedbubble.speed"
+        );
 
     VMLLog(
-        @"*** PUBLISHED SPEED = %ld ***",
-        (long)speed
+        @"*** PUBLISHED SPEED=%ld stateStatus=%u postStatus=%u ***",
+        (long)speed,
+        stateStatus,
+        postStatus
     );
 }
+
+#pragma mark - FLUTTER HOOK
 
 static id VMLHookMethodCallInit(
     id self,
     SEL _cmd,
-    NSString *method,
+    NSString *methodName,
     id arguments
 ) {
     id result = nil;
@@ -108,12 +129,12 @@ static id VMLHookMethodCallInit(
              gOrigMethodCallInit)(
                 self,
                 _cmd,
-                method,
+                methodName,
                 arguments
             );
     }
 
-    if ([method isEqualToString:@"updateSpeedLimit"]) {
+    if ([methodName isEqualToString:@"updateSpeedLimit"]) {
         NSInteger speed =
             VMLSpeedFromObject(arguments);
 
@@ -128,6 +149,8 @@ static id VMLHookMethodCallInit(
 
     return result;
 }
+
+#pragma mark - INSTALL
 
 static void VMLInstallHook(void) {
     Class cls =
@@ -154,8 +177,10 @@ static void VMLInstallHook(void) {
     IMP current =
         method_getImplementation(method);
 
-    if (current == (IMP)VMLHookMethodCallInit)
+    if (current == (IMP)VMLHookMethodCallInit) {
+        VMLLog(@"FlutterMethodCall already hooked");
         return;
+    }
 
     gOrigMethodCallInit = current;
 
@@ -166,3 +191,68 @@ static void VMLInstallHook(void) {
 
     VMLLog(
         @"HOOKED FlutterMethodCall initWithMethodName:arguments:"
+    );
+}
+
+#pragma mark - START
+
+static void VMLStart(void) {
+    NSString *bundle =
+        NSBundle.mainBundle.bundleIdentifier ?: @"";
+
+    NSString *process =
+        NSProcessInfo.processInfo.processName ?: @"";
+
+    if (![bundle isEqualToString:@"vn.vietmap.live"]) {
+        return;
+    }
+
+    VMLLog(@"========================================");
+    VMLLog(@"VML RUNTIME BRIDGE V4");
+    VMLLog(@"bundle=%@", bundle);
+    VMLLog(@"process=%@", process);
+    VMLLog(@"home=%@", NSHomeDirectory());
+    VMLLog(@"========================================");
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            1 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLLog(@"INSTALL +1");
+            VMLInstallHook();
+        }
+    );
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            4 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLLog(@"INSTALL +4");
+            VMLInstallHook();
+        }
+    );
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            8 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLLog(@"INSTALL +8");
+            VMLInstallHook();
+        }
+    );
+}
+
+%ctor {
+    @autoreleasepool {
+        VMLStart();
+    }
+}
