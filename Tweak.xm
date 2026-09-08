@@ -6,6 +6,10 @@
 #pragma mark - Globals
 
 static UIWindow *gPhoneWindow = nil;
+
+static UIView *gVMLCarPlayBubble = nil;
+static __weak UIView *gVMLCarPlayHost = nil;
+
 static BOOL gVMLAddingOwnView = NO;
 
 static const NSInteger kVMLBubbleTag = 990099;
@@ -29,7 +33,7 @@ static void VMLLog(NSString *format, ...) {
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
 
-    NSLog(@"[VMLHOST] %@", msg);
+    NSLog(@"[VML] %@", msg);
 
     const char *path =
         "/var/mobile/VMLHostSniffer.txt";
@@ -47,16 +51,7 @@ static void VMLLog(NSString *format, ...) {
     }
 }
 
-#pragma mark - Process checks
-
-static BOOL VMLIsCarPlay(void) {
-    NSString *bundle =
-        NSBundle.mainBundle.bundleIdentifier ?: @"";
-
-    return
-        [bundle isEqualToString:
-            @"com.apple.CarPlayApp"];
-}
+#pragma mark - Process
 
 static BOOL VMLIsSpringBoard(void) {
     NSString *bundle =
@@ -67,7 +62,7 @@ static BOOL VMLIsSpringBoard(void) {
             @"com.apple.springboard"];
 }
 
-#pragma mark - Speed text
+#pragma mark - Speed
 
 static NSString *VMLSpeedText(void) {
     if (gVMLCurrentSpeed > 0 &&
@@ -82,7 +77,7 @@ static NSString *VMLSpeedText(void) {
     return @"--";
 }
 
-#pragma mark - Bubble creator
+#pragma mark - Bubble
 
 static UIView *VMLMakeBubble(
     NSString *text,
@@ -113,7 +108,7 @@ static UIView *VMLMakeBubble(
     bubble.clipsToBounds = YES;
 
     /*
-     Keep passthrough behavior for now.
+     Không chặn thao tác CarPlay.
     */
     bubble.userInteractionEnabled = NO;
 
@@ -129,7 +124,8 @@ static UIView *VMLMakeBubble(
         UIViewAutoresizingFlexibleWidth |
         UIViewAutoresizingFlexibleHeight;
 
-    label.text = text;
+    label.text =
+        text;
 
     label.textColor =
         UIColor.blackColor;
@@ -149,23 +145,17 @@ static UIView *VMLMakeBubble(
     label.minimumScaleFactor =
         0.5;
 
-    [bubble addSubview:label];
+    [bubble addSubview:
+        label];
 
     return bubble;
 }
 
-#pragma mark - Update existing bubbles
+#pragma mark - Update bubble
 
-static void VMLUpdateBubbleInView(
-    UIView *root
+static void VMLUpdateOneBubble(
+    UIView *bubble
 ) {
-    if (!root)
-        return;
-
-    UIView *bubble =
-        [root viewWithTag:
-            kVMLBubbleTag];
-
     if (!bubble)
         return;
 
@@ -183,41 +173,46 @@ static void VMLUpdateBubbleInView(
     bubble.layer.zPosition =
         CGFLOAT_MAX;
 
-    [bubble.superview
-        bringSubviewToFront:
-            bubble];
-
-    VMLLog(
-        @"BUBBLE UPDATED speed=%ld text=%@",
-        (long)gVMLCurrentSpeed,
-        label.text
-    );
+    if (bubble.superview) {
+        [bubble.superview
+            bringSubviewToFront:
+                bubble];
+    }
 }
 
-static void VMLUpdateAllKnownBubbles(void) {
+static void VMLUpdateAllBubbles(void) {
     dispatch_async(
         dispatch_get_main_queue(),
         ^{
-            UIApplication *app =
-                UIApplication.sharedApplication;
+            if (gVMLCarPlayBubble) {
+                VMLUpdateOneBubble(
+                    gVMLCarPlayBubble
+                );
+            }
 
-            for (UIScene *scene in app.connectedScenes) {
+            if (gPhoneWindow) {
+                UIView *phoneBubble =
+                    [gPhoneWindow
+                        viewWithTag:
+                            kVMLBubbleTag];
 
-                if (![scene isKindOfClass:UIWindowScene.class])
-                    continue;
-
-                UIWindowScene *windowScene =
-                    (UIWindowScene *)scene;
-
-                for (UIWindow *window in windowScene.windows) {
-                    VMLUpdateBubbleInView(window);
+                if (phoneBubble) {
+                    VMLUpdateOneBubble(
+                        phoneBubble
+                    );
                 }
             }
+
+            VMLLog(
+                @"BUBBLES UPDATED speed=%ld text=%@",
+                (long)gVMLCurrentSpeed,
+                VMLSpeedText()
+            );
         }
     );
 }
 
-#pragma mark - Speed IPC receiver
+#pragma mark - IPC receiver
 
 static void VMLReadPublishedSpeed(void) {
     if (gVMLSpeedNotifyToken == 0)
@@ -247,21 +242,22 @@ static void VMLReadPublishedSpeed(void) {
         speed > 200) {
 
         VMLLog(
-            @"IGNORE RECEIVED SPEED=%ld",
+            @"IGNORE INVALID SPEED=%ld",
             (long)speed
         );
 
         return;
     }
 
-    gVMLCurrentSpeed = speed;
+    gVMLCurrentSpeed =
+        speed;
 
     VMLLog(
-        @"*** SPEED RECEIVED FROM VIETMAP = %ld ***",
+        @"*** SPEED RECEIVED = %ld ***",
         (long)gVMLCurrentSpeed
     );
 
-    VMLUpdateAllKnownBubbles();
+    VMLUpdateAllBubbles();
 }
 
 static void VMLStartSpeedReceiver(void) {
@@ -296,174 +292,282 @@ static void VMLStartSpeedReceiver(void) {
         return;
     }
 
-    gVMLSpeedNotifyToken = token;
+    gVMLSpeedNotifyToken =
+        token;
 
     VMLLog(
         @"SPEED RECEIVER ACTIVE token=%d",
         token
     );
 
-    /*
-     Read state immediately in case VietMap
-     published before CarPlay bubble appeared.
-    */
     VMLReadPublishedSpeed();
 }
 
-#pragma mark - Host inspection
+#pragma mark - View search helpers
 
-static NSString *VMLViewChain(
-    UIView *view
+static BOOL VMLApprox(
+    CGFloat a,
+    CGFloat b,
+    CGFloat tolerance
 ) {
-    NSMutableArray *parts =
-        [NSMutableArray array];
-
-    UIView *current = view;
-
-    NSInteger count = 0;
-
-    while (current &&
-           count < 12) {
-
-        NSString *part =
-            [NSString stringWithFormat:
-                @"%@ %@",
-                NSStringFromClass(
-                    current.class
-                ),
-                NSStringFromCGRect(
-                    current.frame
-                )];
-
-        [parts addObject:
-            part];
-
-        current =
-            current.superview;
-
-        count++;
-    }
-
     return
-        [parts componentsJoinedByString:
-            @" -> "];
+        fabs(a - b) <= tolerance;
 }
 
-static void VMLDumpHost(
-    UIView *host,
-    UIView *duoBubble
+static BOOL VMLLooksLikeCarPlayWindow(
+    UIWindow *window
 ) {
-    UIWindow *window =
-        host.window;
+    if (!window)
+        return NO;
 
-    UIViewController *root =
-        window.rootViewController;
-
-    NSString *windowClass =
-        window
-        ? NSStringFromClass(
+    NSString *className =
+        NSStringFromClass(
             window.class
-        )
-        : @"nil";
+        );
 
-    NSString *rootClass =
-        root
-        ? NSStringFromClass(
+    if (![className
+            isEqualToString:
+                @"UIRootSceneWindow"]) {
+
+        return NO;
+    }
+
+    CGSize size =
+        window.bounds.size;
+
+    BOOL normal =
+        VMLApprox(
+            size.width,
+            640.0,
+            30.0
+        ) &&
+        VMLApprox(
+            size.height,
+            240.0,
+            30.0
+        );
+
+    BOOL rotated =
+        VMLApprox(
+            size.width,
+            240.0,
+            30.0
+        ) &&
+        VMLApprox(
+            size.height,
+            640.0,
+            30.0
+        );
+
+    return
+        normal || rotated;
+}
+
+static UIView *VMLFindClassRecursive(
+    UIView *root,
+    NSString *wantedClass
+) {
+    if (!root)
+        return nil;
+
+    NSString *className =
+        NSStringFromClass(
             root.class
-        )
-        : @"nil";
+        );
 
-    NSString *sceneRole =
-        @"nil";
+    if ([className
+            isEqualToString:
+                wantedClass]) {
 
-    if (@available(iOS 13.0, *)) {
-        UIWindowScene *scene =
-            window.windowScene;
+        return root;
+    }
 
-        if (scene) {
-            sceneRole =
-                scene.session.role ?: @"nil";
+    for (UIView *child
+         in root.subviews) {
+
+        UIView *found =
+            VMLFindClassRecursive(
+                child,
+                wantedClass
+            );
+
+        if (found)
+            return found;
+    }
+
+    return nil;
+}
+
+#pragma mark - Find CarPlay window
+
+static UIWindow *VMLFindCarPlayWindow(void) {
+    UIApplication *app =
+        UIApplication.sharedApplication;
+
+    for (UIScene *scene
+         in app.connectedScenes) {
+
+        if (![scene
+                isKindOfClass:
+                    UIWindowScene.class]) {
+
+            continue;
+        }
+
+        UIWindowScene *windowScene =
+            (UIWindowScene *)scene;
+
+        for (UIWindow *window
+             in windowScene.windows) {
+
+            if (VMLLooksLikeCarPlayWindow(
+                    window)) {
+
+                VMLLog(
+                    @"CARPLAY WINDOW FOUND class=%@ frame=%@ bounds=%@ role=%@",
+                    NSStringFromClass(
+                        window.class
+                    ),
+                    NSStringFromCGRect(
+                        window.frame
+                    ),
+                    NSStringFromCGRect(
+                        window.bounds
+                    ),
+                    windowScene.session.role
+                );
+
+                return window;
+            }
         }
     }
 
-    VMLLog(
-        @"========== DUODASH HOST FOUND =========="
-    );
-
-    VMLLog(
-        @"HOST CLASS = %@",
-        NSStringFromClass(
-            host.class
-        )
-    );
-
-    VMLLog(
-        @"HOST FRAME = %@",
-        NSStringFromCGRect(
-            host.frame
-        )
-    );
-
-    VMLLog(
-        @"HOST BOUNDS = %@",
-        NSStringFromCGRect(
-            host.bounds
-        )
-    );
-
-    VMLLog(
-        @"DUO BUBBLE FRAME = %@",
-        NSStringFromCGRect(
-            duoBubble.frame
-        )
-    );
-
-    VMLLog(
-        @"WINDOW CLASS = %@",
-        windowClass
-    );
-
-    VMLLog(
-        @"WINDOW FRAME = %@",
-        window
-            ? NSStringFromCGRect(
-                window.frame
-            )
-            : @"nil"
-    );
-
-    VMLLog(
-        @"ROOT VC = %@",
-        rootClass
-    );
-
-    VMLLog(
-        @"SCENE ROLE = %@",
-        sceneRole
-    );
-
-    VMLLog(
-        @"SUPERVIEW CHAIN = %@",
-        VMLViewChain(
-            host
-        )
-    );
-
-    VMLLog(
-        @"========================================"
-    );
+    return nil;
 }
 
-#pragma mark - Put runtime speed beside DuoDash
+#pragma mark - Find real host
 
-static void VMLAttachSpeedToDuoHost(
-    UIView *host,
-    UIView *duoBubble
+static UIView *VMLFindCarPlayHost(
+    UIWindow *window
 ) {
-    if (!host ||
-        !duoBubble) {
+    if (!window)
+        return nil;
+
+    /*
+     Host đã quan sát được:
+     
+     _UIVisualEffectContentView
+       -> UIVisualEffectView
+       -> UIRootSceneWindow
+     
+     Ưu tiên đúng content view này.
+    */
+
+    UIView *content =
+        VMLFindClassRecursive(
+            window,
+            @"_UIVisualEffectContentView"
+        );
+
+    if (content) {
+        VMLLog(
+            @"CARPLAY CONTENT HOST FOUND class=%@ frame=%@ bounds=%@",
+            NSStringFromClass(
+                content.class
+            ),
+            NSStringFromCGRect(
+                content.frame
+            ),
+            NSStringFromCGRect(
+                content.bounds
+            )
+        );
+
+        return content;
+    }
+
+    /*
+     Fallback:
+     tìm UIVisualEffectView rồi lấy contentView.
+    */
+
+    UIView *effect =
+        VMLFindClassRecursive(
+            window,
+            @"UIVisualEffectView"
+        );
+
+    if (effect &&
+        [effect
+            isKindOfClass:
+                UIVisualEffectView.class]) {
+
+        UIVisualEffectView *visual =
+            (UIVisualEffectView *)effect;
+
+        UIView *fallback =
+            visual.contentView;
+
+        if (fallback) {
+            VMLLog(
+                @"CARPLAY FALLBACK CONTENT HOST frame=%@",
+                NSStringFromCGRect(
+                    fallback.frame
+                )
+            );
+
+            return fallback;
+        }
+    }
+
+    /*
+     Fallback cuối:
+     dùng trực tiếp SpringBoard UIRootSceneWindow.
+    */
+
+    VMLLog(
+        @"CARPLAY FALLBACK TO ROOT WINDOW"
+    );
+
+    return window;
+}
+
+#pragma mark - Attach CarPlay bubble
+
+static void VMLAttachCarPlayBubble(
+    UIView *host
+) {
+    if (!host)
+        return;
+
+    /*
+     Nếu bubble đang ở đúng host rồi,
+     chỉ đưa lên trước + cập nhật số.
+    */
+
+    if (gVMLCarPlayBubble &&
+        gVMLCarPlayBubble.superview == host) {
+
+        VMLUpdateOneBubble(
+            gVMLCarPlayBubble
+        );
 
         return;
+    }
+
+    /*
+     Nếu CarPlay đổi host/window,
+     bỏ bubble khỏi host cũ.
+    */
+
+    if (gVMLCarPlayBubble &&
+        gVMLCarPlayBubble.superview) {
+
+        [gVMLCarPlayBubble
+            removeFromSuperview];
+
+        gVMLCarPlayBubble =
+            nil;
     }
 
     UIView *existing =
@@ -471,31 +575,21 @@ static void VMLAttachSpeedToDuoHost(
             kVMLBubbleTag];
 
     if (existing) {
-        UILabel *label =
-            (UILabel *)
-            [existing viewWithTag:
-                kVMLLabelTag];
+        gVMLCarPlayBubble =
+            existing;
 
-        if (label) {
-            label.text =
-                VMLSpeedText();
-        }
+        gVMLCarPlayHost =
+            host;
 
-        existing.layer.zPosition =
-            CGFLOAT_MAX;
-
-        [host bringSubviewToFront:
-            existing];
-
-        VMLLog(
-            @"EXISTING BUBBLE UPDATED speed=%ld",
-            (long)gVMLCurrentSpeed
+        VMLUpdateOneBubble(
+            existing
         );
 
         return;
     }
 
-    gVMLAddingOwnView = YES;
+    gVMLAddingOwnView =
+        YES;
 
     CGFloat size =
         46.0;
@@ -509,46 +603,43 @@ static void VMLAttachSpeedToDuoHost(
     bubble.tag =
         kVMLBubbleTag;
 
-    CGRect duoFrame =
-        duoBubble.frame;
+    /*
+     Vị trí ban đầu độc lập DuoDash.
+     
+     Host quan sát trước đây là 595x240,
+     nên đặt sát trái + khoảng giữa chiều cao.
+    */
 
     CGFloat x =
-        CGRectGetMaxX(
-            duoFrame
-        ) + 8.0;
+        16.0;
 
     CGFloat y =
-        CGRectGetMinY(
-            duoFrame
-        );
+        122.0;
 
-    if (x + size >
-        host.bounds.size.width) {
-
-        x =
-            CGRectGetMinX(
-                duoFrame
-            )
+    if (host.bounds.size.height > 0) {
+        CGFloat maxY =
+            host.bounds.size.height
             - size
             - 8.0;
+
+        if (y > maxY)
+            y = maxY;
+
+        if (y < 8.0)
+            y = 8.0;
     }
 
-    if (x < 4.0)
-        x = 4.0;
+    if (host.bounds.size.width > 0) {
+        CGFloat maxX =
+            host.bounds.size.width
+            - size
+            - 8.0;
 
-    if (y < 4.0)
-        y = 4.0;
+        if (x > maxX)
+            x = maxX;
 
-    if (y + size >
-        host.bounds.size.height) {
-
-        y =
-            MAX(
-                4.0,
-                host.bounds.size.height
-                - size
-                - 4.0
-            );
+        if (x < 8.0)
+            x = 8.0;
     }
 
     bubble.frame =
@@ -568,10 +659,17 @@ static void VMLAttachSpeedToDuoHost(
     [host bringSubviewToFront:
         bubble];
 
-    gVMLAddingOwnView = NO;
+    gVMLCarPlayBubble =
+        bubble;
+
+    gVMLCarPlayHost =
+        host;
+
+    gVMLAddingOwnView =
+        NO;
 
     VMLLog(
-        @"RUNTIME BUBBLE ADDED host=%@ frame=%@ speed=%ld text=%@",
+        @"*** INDEPENDENT CARPLAY BUBBLE ADDED host=%@ frame=%@ speed=%ld text=%@ ***",
         NSStringFromClass(
             host.class
         ),
@@ -583,116 +681,77 @@ static void VMLAttachSpeedToDuoHost(
     );
 }
 
-#pragma mark - IMPORTANT HOOK
+#pragma mark - CarPlay scan
 
-%hook UIView
-
-- (void)addSubview:(UIView *)view {
-    %orig;
-
-    if (!(VMLIsCarPlay() ||
-          VMLIsSpringBoard())) {
-
-        return;
-    }
-
-    if (gVMLAddingOwnView)
+static void VMLScanForCarPlay(void) {
+    if (!VMLIsSpringBoard())
         return;
 
-    if (!view)
-        return;
+    UIWindow *window =
+        VMLFindCarPlayWindow();
 
-    NSString *className =
-        NSStringFromClass(
-            view.class
-        );
-
-    if (![className
-            isEqualToString:
-                @"CNABBubbleView"]) {
-
+    if (!window) {
         return;
     }
 
     UIView *host =
-        view.superview;
+        VMLFindCarPlayHost(
+            window
+        );
 
-    NSString *bundle =
-        NSBundle.mainBundle
-            .bundleIdentifier ?: @"";
+    if (!host)
+        return;
 
-    NSString *process =
-        NSProcessInfo.processInfo
-            .processName ?: @"";
-
-    VMLLog(
-        @"INTERCEPTED CNABBubbleView bundle=%@ process=%@",
-        bundle,
-        process
+    VMLAttachCarPlayBubble(
+        host
     );
+}
 
-    VMLDumpHost(
-        host,
-        view
-    );
+#pragma mark - Repeating scanner
+
+static void VMLScheduleCarPlayScanner(void) {
+    if (!VMLIsSpringBoard())
+        return;
 
     dispatch_async(
         dispatch_get_main_queue(),
         ^{
-            VMLAttachSpeedToDuoHost(
-                host,
-                view
+            NSTimer *timer =
+                [NSTimer
+                    scheduledTimerWithTimeInterval:
+                        1.0
+                    repeats:
+                        YES
+                    block:
+                        ^(
+                            NSTimer *timer
+                        ) {
+                            VMLScanForCarPlay();
+                        }];
+
+            [[NSRunLoop mainRunLoop]
+                addTimer:
+                    timer
+                forMode:
+                    NSRunLoopCommonModes];
+
+            VMLLog(
+                @"CARPLAY INDEPENDENT SCANNER STARTED"
             );
 
-            dispatch_after(
-                dispatch_time(
-                    DISPATCH_TIME_NOW,
-                    1 * NSEC_PER_SEC
-                ),
-                dispatch_get_main_queue(),
-                ^{
-                    UIView *test =
-                        [host viewWithTag:
-                            kVMLBubbleTag];
-
-                    if (test) {
-                        UILabel *label =
-                            (UILabel *)
-                            [test viewWithTag:
-                                kVMLLabelTag];
-
-                        if (label) {
-                            label.text =
-                                VMLSpeedText();
-                        }
-
-                        test.layer.zPosition =
-                            CGFLOAT_MAX;
-
-                        [host
-                            bringSubviewToFront:
-                                test];
-
-                        VMLLog(
-                            @"RUNTIME BUBBLE RE-BROUGHT speed=%ld",
-                            (long)gVMLCurrentSpeed
-                        );
-                    }
-                }
-            );
+            VMLScanForCarPlay();
         }
     );
 }
 
-%end
-
-#pragma mark - iPhone test bubble
+#pragma mark - Phone bubble
 
 static UIWindowScene *VMLPhoneScene(void) {
+    UIApplication *app =
+        UIApplication.sharedApplication;
+
     for (UIScene *scene
-         in UIApplication
-            .sharedApplication
-            .connectedScenes) {
+         in app.connectedScenes) {
 
         if (![scene
                 isKindOfClass:
@@ -701,20 +760,33 @@ static UIWindowScene *VMLPhoneScene(void) {
             continue;
         }
 
-        UIWindowScene *ws =
+        UIWindowScene *windowScene =
             (UIWindowScene *)scene;
 
-        NSString *role =
-            ws.session.role ?: @"";
+        /*
+         Bỏ qua scene giống CarPlay.
+        */
 
-        if ([role
-                containsString:
-                    @"CarPlay"]) {
+        BOOL hasCarPlayWindow =
+            NO;
 
-            continue;
+        for (UIWindow *window
+             in windowScene.windows) {
+
+            if (VMLLooksLikeCarPlayWindow(
+                    window)) {
+
+                hasCarPlayWindow =
+                    YES;
+
+                break;
+            }
         }
 
-        return ws;
+        if (hasCarPlayWindow)
+            continue;
+
+        return windowScene;
     }
 
     return nil;
@@ -800,28 +872,41 @@ static void VMLCreatePhoneBubble(void) {
             process
         );
 
-        if (VMLIsSpringBoard()) {
-            /*
-             Start IPC receiver immediately.
-            */
-            VMLStartSpeedReceiver();
+        if (!VMLIsSpringBoard())
+            return;
 
-            dispatch_after(
-                dispatch_time(
-                    DISPATCH_TIME_NOW,
-                    3 * NSEC_PER_SEC
-                ),
-                dispatch_get_main_queue(),
-                ^{
-                    VMLCreatePhoneBubble();
-                }
-            );
-        }
+        /*
+         1. Nhận speed từ VietMap.
+        */
+        VMLStartSpeedReceiver();
 
-        if (VMLIsCarPlay()) {
-            VMLLog(
-                @"CARPLAY HOST SNIFFER ACTIVE"
-            );
-        }
+        /*
+         2. Bubble iPhone.
+        */
+        dispatch_after(
+            dispatch_time(
+                DISPATCH_TIME_NOW,
+                3 * NSEC_PER_SEC
+            ),
+            dispatch_get_main_queue(),
+            ^{
+                VMLCreatePhoneBubble();
+            }
+        );
+
+        /*
+         3. Tự tìm CarPlay.
+            Không phụ thuộc DuoDash.
+        */
+        dispatch_after(
+            dispatch_time(
+                DISPATCH_TIME_NOW,
+                1 * NSEC_PER_SEC
+            ),
+            dispatch_get_main_queue(),
+            ^{
+                VMLScheduleCarPlayScanner();
+            }
+        );
     }
 }
