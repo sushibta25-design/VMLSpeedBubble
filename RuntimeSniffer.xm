@@ -2,6 +2,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+#pragma mark - Log
+
 static NSString *VMLRuntimeLogPath(void) {
     NSString *documents =
         [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
@@ -21,14 +23,22 @@ static void VMLRLog(NSString *format, ...) {
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
 
+    NSString *path = VMLRuntimeLogPath();
+
     NSFileHandle *fh =
-        [NSFileHandle fileHandleForWritingAtPath:VMLRuntimeLogPath];
+        [NSFileHandle fileHandleForWritingAtPath:path];
 
     if (!fh) {
-        [line writeToFile:VMLRuntimeLogPath
+        NSError *error = nil;
+
+        [line writeToFile:path
                atomically:YES
                  encoding:NSUTF8StringEncoding
-                    error:nil];
+                    error:&error];
+
+        if (error) {
+            NSLog(@"[VMLRUNTIME] WRITE ERROR: %@", error);
+        }
     } else {
         [fh seekToEndOfFile];
 
@@ -63,24 +73,17 @@ static NSString *VMLSafeDescription(id obj) {
     }
 }
 
-#pragma mark - Dynamic selector sniffer
+#pragma mark - Hook storage
 
-static NSMutableSet *gVMLHooked;
+static NSMutableSet *gVMLHooked = nil;
 
-static BOOL VMLInterestingSelector(NSString *name) {
-    if (!name)
-        return NO;
+static const void *VMLKeyForMethod(Class cls, SEL sel) {
+    NSString *key =
+        [NSString stringWithFormat:@"%@|%@",
+         NSStringFromClass(cls),
+         NSStringFromSelector(sel)];
 
-    NSString *s =
-        name.lowercaseString;
-
-    return
-        [s containsString:@"speedlimit"] ||
-        [s containsString:@"speed_limit"] ||
-        [s containsString:@"speedandlimit"] ||
-        [s containsString:@"speedandlimitview"] ||
-        [s containsString:@"updatespeed"] ||
-        [s containsString:@"sendspeed"];
+    return (__bridge_retained const void *)key;
 }
 
 static IMP VMLOriginalIMP(Class cls, SEL sel) {
@@ -92,13 +95,16 @@ static IMP VMLOriginalIMP(Class cls, SEL sel) {
          NSStringFromClass(cls),
          NSStringFromSelector(sel)];
 
-    NSValue *v =
+    NSValue *value =
         objc_getAssociatedObject(
             cls,
-            (__bridge const void *)(key)
+            (__bridge const void *)key
         );
 
-    return v ? (IMP)[v pointerValue] : NULL;
+    if (!value)
+        return NULL;
+
+    return (IMP)[value pointerValue];
 }
 
 static void VMLStoreOriginalIMP(
@@ -116,20 +122,50 @@ static void VMLStoreOriginalIMP(
 
     objc_setAssociatedObject(
         cls,
-        (__bridge const void *)(key),
+        (__bridge const void *)key,
         [NSValue valueWithPointer:(const void *)imp],
         OBJC_ASSOCIATION_RETAIN_NONATOMIC
     );
 }
 
-/*
- * Supported safe signatures:
- *
- * -(void)foo
- * -(void)foo:(id)arg
- * -(id)foo
- * -(id)foo:(id)arg
- */
+#pragma mark - Selector filter
+
+static BOOL VMLInterestingSelector(NSString *name) {
+    if (!name.length)
+        return NO;
+
+    NSString *s = name.lowercaseString;
+
+    return
+        [s containsString:@"speedlimit"] ||
+        [s containsString:@"speed_limit"] ||
+        [s containsString:@"speedandlimit"] ||
+        [s containsString:@"speedandlimitview"] ||
+        [s containsString:@"updatespeed"] ||
+        [s containsString:@"sendspeed"];
+}
+
+#pragma mark - Replacement methods
+
+static IMP VMLFindOriginal(id self, SEL cmd) {
+    if (!self || !cmd)
+        return NULL;
+
+    Class cls = [self class];
+
+    IMP imp =
+        VMLOriginalIMP(cls, cmd);
+
+    if (!imp) {
+        Class meta =
+            object_getClass(cls);
+
+        imp =
+            VMLOriginalIMP(meta, cmd);
+    }
+
+    return imp;
+}
 
 static void VMLVoidNoArg(
     id self,
@@ -142,18 +178,7 @@ static void VMLVoidNoArg(
     );
 
     IMP imp =
-        VMLOriginalIMP(
-            object_getClass(self),
-            _cmd
-        );
-
-    if (!imp) {
-        imp =
-            VMLOriginalIMP(
-                [self class],
-                _cmd
-            );
-    }
+        VMLFindOriginal(self, _cmd);
 
     if (imp) {
         ((void (*)(id, SEL))imp)(
@@ -173,24 +198,11 @@ static void VMLVoidOneObject(
         NSStringFromClass([self class]),
         NSStringFromSelector(_cmd),
         VMLSafeDescription(arg),
-        arg
-            ? NSStringFromClass([arg class])
-            : @"nil"
+        arg ? NSStringFromClass([arg class]) : @"nil"
     );
 
     IMP imp =
-        VMLOriginalIMP(
-            object_getClass(self),
-            _cmd
-        );
-
-    if (!imp) {
-        imp =
-            VMLOriginalIMP(
-                [self class],
-                _cmd
-            );
-    }
+        VMLFindOriginal(self, _cmd);
 
     if (imp) {
         ((void (*)(id, SEL, id))imp)(
@@ -206,18 +218,7 @@ static id VMLObjectNoArg(
     SEL _cmd
 ) {
     IMP imp =
-        VMLOriginalIMP(
-            object_getClass(self),
-            _cmd
-        );
-
-    if (!imp) {
-        imp =
-            VMLOriginalIMP(
-                [self class],
-                _cmd
-            );
-    }
+        VMLFindOriginal(self, _cmd);
 
     id result = nil;
 
@@ -234,9 +235,7 @@ static id VMLObjectNoArg(
         NSStringFromClass([self class]),
         NSStringFromSelector(_cmd),
         VMLSafeDescription(result),
-        result
-            ? NSStringFromClass([result class])
-            : @"nil"
+        result ? NSStringFromClass([result class]) : @"nil"
     );
 
     return result;
@@ -252,24 +251,11 @@ static id VMLObjectOneObject(
         NSStringFromClass([self class]),
         NSStringFromSelector(_cmd),
         VMLSafeDescription(arg),
-        arg
-            ? NSStringFromClass([arg class])
-            : @"nil"
+        arg ? NSStringFromClass([arg class]) : @"nil"
     );
 
     IMP imp =
-        VMLOriginalIMP(
-            object_getClass(self),
-            _cmd
-        );
-
-    if (!imp) {
-        imp =
-            VMLOriginalIMP(
-                [self class],
-                _cmd
-            );
-    }
+        VMLFindOriginal(self, _cmd);
 
     id result = nil;
 
@@ -287,13 +273,13 @@ static id VMLObjectOneObject(
         NSStringFromClass([self class]),
         NSStringFromSelector(_cmd),
         VMLSafeDescription(result),
-        result
-            ? NSStringFromClass([result class])
-            : @"nil"
+        result ? NSStringFromClass([result class]) : @"nil"
     );
 
     return result;
 }
+
+#pragma mark - Runtime scan
 
 static void VMLScanClass(Class cls) {
     if (!cls)
@@ -313,13 +299,17 @@ static void VMLScanClass(Class cls) {
             &count
         );
 
-    for (unsigned int i = 0; i < count; i++) {
+    if (!methods)
+        return;
 
-        Method m =
-            methods[i];
+    for (unsigned int i = 0; i < count; i++) {
+        Method method = methods[i];
 
         SEL sel =
-            method_getName(m);
+            method_getName(method);
+
+        if (!sel)
+            continue;
 
         NSString *selName =
             NSStringFromSelector(sel);
@@ -336,18 +326,18 @@ static void VMLScanClass(Class cls) {
             continue;
 
         const char *types =
-            method_getTypeEncoding(m);
+            method_getTypeEncoding(method);
 
         if (!types)
             continue;
 
         unsigned int argc =
-            method_getNumberOfArguments(m);
+            method_getNumberOfArguments(method);
 
         char returnType[128] = {0};
 
         method_getReturnType(
-            m,
+            method,
             returnType,
             sizeof(returnType)
         );
@@ -363,44 +353,51 @@ static void VMLScanClass(Class cls) {
         IMP replacement = NULL;
 
         /*
-         * argc includes self + _cmd
+         * Objective-C argument count includes:
+         *
+         * self
+         * _cmd
+         *
+         * Therefore:
+         *
+         * argc == 2 : no explicit arguments
+         * argc == 3 : one explicit argument
          */
 
         if (argc == 2) {
-
             if (returnType[0] == 'v') {
                 replacement =
                     (IMP)VMLVoidNoArg;
             }
-
             else if (returnType[0] == '@') {
                 replacement =
                     (IMP)VMLObjectNoArg;
             }
+        }
 
-        } else if (argc == 3) {
-
+        else if (argc == 3) {
             char argType[128] = {0};
 
             method_getArgumentType(
-                m,
+                method,
                 2,
                 argType,
                 sizeof(argType)
             );
 
             /*
-             * Hook object argument only.
-             * Skip primitive/struct signatures.
+             * For this diagnostic build we only replace
+             * methods taking an Objective-C object.
+             *
+             * int / BOOL / double / struct etc are logged
+             * as FOUND but intentionally skipped.
              */
 
             if (argType[0] == '@') {
-
                 if (returnType[0] == 'v') {
                     replacement =
                         (IMP)VMLVoidOneObject;
                 }
-
                 else if (returnType[0] == '@') {
                     replacement =
                         (IMP)VMLObjectOneObject;
@@ -409,7 +406,6 @@ static void VMLScanClass(Class cls) {
         }
 
         if (!replacement) {
-
             VMLRLog(
                 @"SKIP unsafe signature class=%@ selector=%@ types=%s",
                 className,
@@ -421,7 +417,17 @@ static void VMLScanClass(Class cls) {
         }
 
         IMP original =
-            method_getImplementation(m);
+            method_getImplementation(method);
+
+        if (!original) {
+            VMLRLog(
+                @"SKIP no IMP class=%@ selector=%@",
+                className,
+                selName
+            );
+
+            continue;
+        }
 
         VMLStoreOriginalIMP(
             cls,
@@ -430,7 +436,7 @@ static void VMLScanClass(Class cls) {
         );
 
         method_setImplementation(
-            m,
+            method,
             replacement
         );
 
@@ -443,28 +449,26 @@ static void VMLScanClass(Class cls) {
         );
     }
 
-    if (methods)
-        free(methods);
+    free(methods);
 }
 
 static void VMLScanRuntime(void) {
     int count =
-        objc_getClassList(
-            NULL,
-            0
-        );
+        objc_getClassList(NULL, 0);
 
-    if (count <= 0)
+    if (count <= 0) {
+        VMLRLog(@"objc_getClassList returned %d", count);
         return;
+    }
 
     Class *classes =
         (__unsafe_unretained Class *)
-        malloc(
-            sizeof(Class) * count
-        );
+        malloc(sizeof(Class) * count);
 
-    if (!classes)
+    if (!classes) {
+        VMLRLog(@"malloc failed");
         return;
+    }
 
     count =
         objc_getClassList(
@@ -478,14 +482,13 @@ static void VMLScanRuntime(void) {
     );
 
     for (int i = 0; i < count; i++) {
-
         Class cls =
             classes[i];
 
         VMLScanClass(cls);
 
         /*
-         * Scan class methods too.
+         * Also scan class methods.
          */
 
         Class meta =
@@ -496,7 +499,14 @@ static void VMLScanRuntime(void) {
     }
 
     free(classes);
+
+    VMLRLog(
+        @"Scan finished. Hooked=%lu",
+        (unsigned long)gVMLHooked.count
+    );
 }
+
+#pragma mark - Startup
 
 static void VMLStartRuntimeSniffer(void) {
     NSString *bundle =
@@ -511,15 +521,17 @@ static void VMLStartRuntimeSniffer(void) {
     gVMLHooked =
         [NSMutableSet new];
 
-    VMLRLog(@"================================");
+    VMLRLog(@"========================================");
     VMLRLog(@"VML RUNTIME SNIFFER START");
     VMLRLog(@"bundle=%@", bundle);
     VMLRLog(@"process=%@", process);
-    VMLRLog(@"================================");
+    VMLRLog(@"home=%@", NSHomeDirectory());
+    VMLRLog(@"log=%@", VMLRuntimeLogPath());
+    VMLRLog(@"========================================");
 
     /*
-     * Flutter/native frameworks may load later.
-     * Scan more than once.
+     * Flutter/native frameworks can appear later,
+     * so scan several times.
      */
 
     dispatch_after(
