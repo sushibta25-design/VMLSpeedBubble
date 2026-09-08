@@ -1,6 +1,5 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
 
 #pragma mark - Log
 
@@ -37,7 +36,7 @@ static void VMLRLog(NSString *format, ...) {
                     error:&error];
 
         if (error) {
-            NSLog(@"[VMLRUNTIME] WRITE ERROR: %@", error);
+            NSLog(@"[VMLRUNTIME] WRITE ERROR %@", error);
         }
     } else {
         [fh seekToEndOfFile];
@@ -51,457 +50,361 @@ static void VMLRLog(NSString *format, ...) {
     NSLog(@"[VMLRUNTIME] %@", msg);
 }
 
-static NSString *VMLSafeDescription(id obj) {
-    if (!obj)
-        return @"(nil)";
+#pragma mark - Helpers
 
-    @try {
-        NSString *s = [obj description];
-
-        if (s.length > 1500) {
-            s =
-                [[s substringToIndex:1500]
-                 stringByAppendingString:@"..."];
-        }
-
-        return s ?: @"(null description)";
-    }
-    @catch (NSException *e) {
-        return
-            [NSString stringWithFormat:
-                @"<description exception %@>", e];
-    }
+static BOOL VMLPlausibleSpeed(unsigned long long value) {
+    return value >= 1 && value <= 200;
 }
 
-#pragma mark - Hook storage
-
-static NSMutableSet *gVMLHooked = nil;
-
-
-
-static IMP VMLOriginalIMP(Class cls, SEL sel) {
-    if (!cls || !sel)
-        return NULL;
-
-    NSString *key =
-        [NSString stringWithFormat:@"%@|%@",
-         NSStringFromClass(cls),
-         NSStringFromSelector(sel)];
-
-    NSValue *value =
-        objc_getAssociatedObject(
-            cls,
-            (__bridge const void *)key
+static void VMLLogSpeed(
+    NSString *className,
+    NSString *selectorName,
+    unsigned long long value
+) {
+    if (VMLPlausibleSpeed(value)) {
+        VMLRLog(
+            @"*** SPEED CANDIDATE *** class=%@ selector=%@ value=%llu",
+            className,
+            selectorName,
+            value
         );
-
-    if (!value)
-        return NULL;
-
-    return (IMP)[value pointerValue];
-}
-
-static void VMLStoreOriginalIMP(
-    Class cls,
-    SEL sel,
-    IMP imp
-) {
-    if (!cls || !sel || !imp)
-        return;
-
-    NSString *key =
-        [NSString stringWithFormat:@"%@|%@",
-         NSStringFromClass(cls),
-         NSStringFromSelector(sel)];
-
-    objc_setAssociatedObject(
-        cls,
-        (__bridge const void *)key,
-        [NSValue valueWithPointer:(const void *)imp],
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC
-    );
-}
-
-#pragma mark - Selector filter
-
-static BOOL VMLInterestingSelector(NSString *name) {
-    if (!name.length)
-        return NO;
-
-    NSString *s = name.lowercaseString;
-
-    return
-        [s containsString:@"speedlimit"] ||
-        [s containsString:@"speed_limit"] ||
-        [s containsString:@"speedandlimit"] ||
-        [s containsString:@"speedandlimitview"] ||
-        [s containsString:@"updatespeed"] ||
-        [s containsString:@"sendspeed"];
-}
-
-#pragma mark - Replacement methods
-
-static IMP VMLFindOriginal(id self, SEL cmd) {
-    if (!self || !cmd)
-        return NULL;
-
-    Class cls = [self class];
-
-    IMP imp =
-        VMLOriginalIMP(cls, cmd);
-
-    if (!imp) {
-        Class meta =
-            object_getClass(cls);
-
-        imp =
-            VMLOriginalIMP(meta, cmd);
-    }
-
-    return imp;
-}
-
-static void VMLVoidNoArg(
-    id self,
-    SEL _cmd
-) {
-    VMLRLog(
-        @"CALL class=%@ selector=%@",
-        NSStringFromClass([self class]),
-        NSStringFromSelector(_cmd)
-    );
-
-    IMP imp =
-        VMLFindOriginal(self, _cmd);
-
-    if (imp) {
-        ((void (*)(id, SEL))imp)(
-            self,
-            _cmd
+    } else {
+        VMLRLog(
+            @"VALUE class=%@ selector=%@ value=%llu",
+            className,
+            selectorName,
+            value
         );
     }
 }
 
-static void VMLVoidOneObject(
-    id self,
-    SEL _cmd,
-    id arg
-) {
-    VMLRLog(
-        @"CALL class=%@ selector=%@ arg=%@ argClass=%@",
-        NSStringFromClass([self class]),
-        NSStringFromSelector(_cmd),
-        VMLSafeDescription(arg),
-        arg ? NSStringFromClass([arg class]) : @"nil"
-    );
+#pragma mark - MNLocation
 
-    IMP imp =
-        VMLFindOriginal(self, _cmd);
+static IMP orig_MNLocation_speedLimit = NULL;
+static IMP orig_MNLocation_setSpeedLimit = NULL;
 
-    if (imp) {
-        ((void (*)(id, SEL, id))imp)(
-            self,
-            _cmd,
-            arg
-        );
-    }
-}
+static unsigned long long
+hook_MNLocation_speedLimit(id self, SEL _cmd) {
 
-static id VMLObjectNoArg(
-    id self,
-    SEL _cmd
-) {
-    IMP imp =
-        VMLFindOriginal(self, _cmd);
+    unsigned long long value = 0;
 
-    id result = nil;
-
-    if (imp) {
-        result =
-            ((id (*)(id, SEL))imp)(
+    if (orig_MNLocation_speedLimit) {
+        value =
+            ((unsigned long long (*)(id, SEL))
+             orig_MNLocation_speedLimit)(
                 self,
                 _cmd
             );
     }
 
-    VMLRLog(
-        @"RETURN class=%@ selector=%@ value=%@ valueClass=%@",
+    VMLLogSpeed(
         NSStringFromClass([self class]),
-        NSStringFromSelector(_cmd),
-        VMLSafeDescription(result),
-        result ? NSStringFromClass([result class]) : @"nil"
+        @"speedLimit",
+        value
     );
 
-    return result;
+    return value;
 }
 
-static id VMLObjectOneObject(
+static void
+hook_MNLocation_setSpeedLimit(
     id self,
     SEL _cmd,
-    id arg
+    unsigned long long value
 ) {
-    VMLRLog(
-        @"CALL class=%@ selector=%@ arg=%@ argClass=%@",
+    VMLLogSpeed(
         NSStringFromClass([self class]),
-        NSStringFromSelector(_cmd),
-        VMLSafeDescription(arg),
-        arg ? NSStringFromClass([arg class]) : @"nil"
+        @"setSpeedLimit:",
+        value
     );
 
-    IMP imp =
-        VMLFindOriginal(self, _cmd);
+    if (orig_MNLocation_setSpeedLimit) {
+        ((void (*)(id, SEL, unsigned long long))
+         orig_MNLocation_setSpeedLimit)(
+            self,
+            _cmd,
+            value
+        );
+    }
+}
 
-    id result = nil;
+#pragma mark - GEOMapFeatureRoad
 
-    if (imp) {
-        result =
-            ((id (*)(id, SEL, id))imp)(
+static IMP orig_GEOMapFeatureRoad_speedLimit = NULL;
+
+static unsigned long long
+hook_GEOMapFeatureRoad_speedLimit(id self, SEL _cmd) {
+
+    unsigned long long value = 0;
+
+    if (orig_GEOMapFeatureRoad_speedLimit) {
+        value =
+            ((unsigned long long (*)(id, SEL))
+             orig_GEOMapFeatureRoad_speedLimit)(
                 self,
-                _cmd,
-                arg
+                _cmd
             );
     }
 
-    VMLRLog(
-        @"RETURN class=%@ selector=%@ value=%@ valueClass=%@",
+    VMLLogSpeed(
         NSStringFromClass([self class]),
-        NSStringFromSelector(_cmd),
-        VMLSafeDescription(result),
-        result ? NSStringFromClass([result class]) : @"nil"
+        @"speedLimit",
+        value
     );
 
-    return result;
+    return value;
 }
 
-#pragma mark - Runtime scan
+#pragma mark - GEOMapAccessRoad
 
-static void VMLScanClass(Class cls) {
-    if (!cls)
-        return;
+static IMP orig_GEOMapAccessRoad_speedLimit = NULL;
 
-    NSString *className =
-        NSStringFromClass(cls);
+static unsigned long long
+hook_GEOMapAccessRoad_speedLimit(id self, SEL _cmd) {
 
-    if (!className.length)
-        return;
+    unsigned long long value = 0;
 
-    unsigned int count = 0;
-
-    Method *methods =
-        class_copyMethodList(
-            cls,
-            &count
-        );
-
-    if (!methods)
-        return;
-
-    for (unsigned int i = 0; i < count; i++) {
-        Method method = methods[i];
-
-        SEL sel =
-            method_getName(method);
-
-        if (!sel)
-            continue;
-
-        NSString *selName =
-            NSStringFromSelector(sel);
-
-        if (!VMLInterestingSelector(selName))
-            continue;
-
-        NSString *unique =
-            [NSString stringWithFormat:@"%@|%@",
-             className,
-             selName];
-
-        if ([gVMLHooked containsObject:unique])
-            continue;
-
-        const char *types =
-            method_getTypeEncoding(method);
-
-        if (!types)
-            continue;
-
-        unsigned int argc =
-            method_getNumberOfArguments(method);
-
-        char returnType[128] = {0};
-
-        method_getReturnType(
-            method,
-            returnType,
-            sizeof(returnType)
-        );
-
-        VMLRLog(
-            @"FOUND class=%@ selector=%@ argc=%u types=%s",
-            className,
-            selName,
-            argc,
-            types
-        );
-
-        IMP replacement = NULL;
-
-        /*
-         * Objective-C argument count includes:
-         *
-         * self
-         * _cmd
-         *
-         * Therefore:
-         *
-         * argc == 2 : no explicit arguments
-         * argc == 3 : one explicit argument
-         */
-
-        if (argc == 2) {
-            if (returnType[0] == 'v') {
-                replacement =
-                    (IMP)VMLVoidNoArg;
-            }
-            else if (returnType[0] == '@') {
-                replacement =
-                    (IMP)VMLObjectNoArg;
-            }
-        }
-
-        else if (argc == 3) {
-            char argType[128] = {0};
-
-            method_getArgumentType(
-                method,
-                2,
-                argType,
-                sizeof(argType)
+    if (orig_GEOMapAccessRoad_speedLimit) {
+        value =
+            ((unsigned long long (*)(id, SEL))
+             orig_GEOMapAccessRoad_speedLimit)(
+                self,
+                _cmd
             );
-
-            /*
-             * For this diagnostic build we only replace
-             * methods taking an Objective-C object.
-             *
-             * int / BOOL / double / struct etc are logged
-             * as FOUND but intentionally skipped.
-             */
-
-            if (argType[0] == '@') {
-                if (returnType[0] == 'v') {
-                    replacement =
-                        (IMP)VMLVoidOneObject;
-                }
-                else if (returnType[0] == '@') {
-                    replacement =
-                        (IMP)VMLObjectOneObject;
-                }
-            }
-        }
-
-        if (!replacement) {
-            VMLRLog(
-                @"SKIP unsafe signature class=%@ selector=%@ types=%s",
-                className,
-                selName,
-                types
-            );
-
-            continue;
-        }
-
-        IMP original =
-            method_getImplementation(method);
-
-        if (!original) {
-            VMLRLog(
-                @"SKIP no IMP class=%@ selector=%@",
-                className,
-                selName
-            );
-
-            continue;
-        }
-
-        VMLStoreOriginalIMP(
-            cls,
-            sel,
-            original
-        );
-
-        method_setImplementation(
-            method,
-            replacement
-        );
-
-        [gVMLHooked addObject:unique];
-
-        VMLRLog(
-            @"HOOKED class=%@ selector=%@",
-            className,
-            selName
-        );
     }
 
-    free(methods);
+    VMLLogSpeed(
+        NSStringFromClass([self class]),
+        @"speedLimit",
+        value
+    );
+
+    return value;
 }
 
-static void VMLScanRuntime(void) {
-    int count =
-        objc_getClassList(NULL, 0);
+#pragma mark - GEOMultiSectionFeature
 
-    if (count <= 0) {
-        VMLRLog(@"objc_getClassList returned %d", count);
-        return;
+static IMP orig_GEOMulti_speedLimit = NULL;
+static IMP orig_GEOMulti_displaySpeedLimit = NULL;
+static IMP orig_GEOMulti_reverseSpeedLimit = NULL;
+
+static unsigned char
+hook_GEOMulti_speedLimit(id self, SEL _cmd) {
+
+    unsigned char value = 0;
+
+    if (orig_GEOMulti_speedLimit) {
+        value =
+            ((unsigned char (*)(id, SEL))
+             orig_GEOMulti_speedLimit)(
+                self,
+                _cmd
+            );
     }
 
-    Class *classes =
-        (__unsafe_unretained Class *)
-        malloc(sizeof(Class) * count);
+    VMLLogSpeed(
+        NSStringFromClass([self class]),
+        @"speedLimit",
+        (unsigned long long)value
+    );
 
-    if (!classes) {
-        VMLRLog(@"malloc failed");
-        return;
+    return value;
+}
+
+static unsigned char
+hook_GEOMulti_displaySpeedLimit(id self, SEL _cmd) {
+
+    unsigned char value = 0;
+
+    if (orig_GEOMulti_displaySpeedLimit) {
+        value =
+            ((unsigned char (*)(id, SEL))
+             orig_GEOMulti_displaySpeedLimit)(
+                self,
+                _cmd
+            );
     }
 
-    count =
-        objc_getClassList(
-            classes,
-            count
+    VMLLogSpeed(
+        NSStringFromClass([self class]),
+        @"displaySpeedLimit",
+        (unsigned long long)value
+    );
+
+    return value;
+}
+
+static unsigned char
+hook_GEOMulti_reverseSpeedLimit(id self, SEL _cmd) {
+
+    unsigned char value = 0;
+
+    if (orig_GEOMulti_reverseSpeedLimit) {
+        value =
+            ((unsigned char (*)(id, SEL))
+             orig_GEOMulti_reverseSpeedLimit)(
+                self,
+                _cmd
+            );
+    }
+
+    VMLLogSpeed(
+        NSStringFromClass([self class]),
+        @"reverseDirectionDisplaySpeedLimit",
+        (unsigned long long)value
+    );
+
+    return value;
+}
+
+#pragma mark - Hook installer
+
+static BOOL VMLHookMethod(
+    NSString *className,
+    NSString *selectorName,
+    IMP replacement,
+    IMP *originalStorage
+) {
+    Class cls =
+        objc_getClass([className UTF8String]);
+
+    if (!cls) {
+        VMLRLog(
+            @"WAIT class not loaded: %@",
+            className
         );
+
+        return NO;
+    }
+
+    SEL sel =
+        NSSelectorFromString(selectorName);
+
+    Method method =
+        class_getInstanceMethod(cls, sel);
+
+    if (!method) {
+        VMLRLog(
+            @"MISSING %@ %@",
+            className,
+            selectorName
+        );
+
+        return NO;
+    }
+
+    IMP current =
+        method_getImplementation(method);
+
+    if (!current) {
+        VMLRLog(
+            @"NO IMP %@ %@",
+            className,
+            selectorName
+        );
+
+        return NO;
+    }
+
+    /*
+     * If already pointing to our replacement,
+     * don't install twice.
+     */
+    if (current == replacement) {
+        return YES;
+    }
+
+    *originalStorage = current;
+
+    method_setImplementation(
+        method,
+        replacement
+    );
 
     VMLRLog(
-        @"Scanning %d Objective-C classes",
-        count
+        @"HOOK INSTALLED class=%@ selector=%@ types=%s",
+        className,
+        selectorName,
+        method_getTypeEncoding(method)
     );
 
-    for (int i = 0; i < count; i++) {
-        Class cls =
-            classes[i];
-
-        VMLScanClass(cls);
-
-        /*
-         * Also scan class methods.
-         */
-
-        Class meta =
-            object_getClass(cls);
-
-        if (meta)
-            VMLScanClass(meta);
-    }
-
-    free(classes);
-
-    VMLRLog(
-        @"Scan finished. Hooked=%lu",
-        (unsigned long)gVMLHooked.count
-    );
+    return YES;
 }
 
-#pragma mark - Startup
+static void VMLInstallHooks(void) {
 
-static void VMLStartRuntimeSniffer(void) {
+    VMLRLog(@"---------- INSTALL PASS ----------");
+
+    if (!orig_MNLocation_speedLimit) {
+        VMLHookMethod(
+            @"MNLocation",
+            @"speedLimit",
+            (IMP)hook_MNLocation_speedLimit,
+            &orig_MNLocation_speedLimit
+        );
+    }
+
+    if (!orig_MNLocation_setSpeedLimit) {
+        VMLHookMethod(
+            @"MNLocation",
+            @"setSpeedLimit:",
+            (IMP)hook_MNLocation_setSpeedLimit,
+            &orig_MNLocation_setSpeedLimit
+        );
+    }
+
+    if (!orig_GEOMapFeatureRoad_speedLimit) {
+        VMLHookMethod(
+            @"GEOMapFeatureRoad",
+            @"speedLimit",
+            (IMP)hook_GEOMapFeatureRoad_speedLimit,
+            &orig_GEOMapFeatureRoad_speedLimit
+        );
+    }
+
+    if (!orig_GEOMapAccessRoad_speedLimit) {
+        VMLHookMethod(
+            @"GEOMapAccessRoad",
+            @"speedLimit",
+            (IMP)hook_GEOMapAccessRoad_speedLimit,
+            &orig_GEOMapAccessRoad_speedLimit
+        );
+    }
+
+    if (!orig_GEOMulti_speedLimit) {
+        VMLHookMethod(
+            @"GEOMultiSectionFeature",
+            @"speedLimit",
+            (IMP)hook_GEOMulti_speedLimit,
+            &orig_GEOMulti_speedLimit
+        );
+    }
+
+    if (!orig_GEOMulti_displaySpeedLimit) {
+        VMLHookMethod(
+            @"GEOMultiSectionFeature",
+            @"displaySpeedLimit",
+            (IMP)hook_GEOMulti_displaySpeedLimit,
+            &orig_GEOMulti_displaySpeedLimit
+        );
+    }
+
+    if (!orig_GEOMulti_reverseSpeedLimit) {
+        VMLHookMethod(
+            @"GEOMultiSectionFeature",
+            @"reverseDirectionDisplaySpeedLimit",
+            (IMP)hook_GEOMulti_reverseSpeedLimit,
+            &orig_GEOMulti_reverseSpeedLimit
+        );
+    }
+
+    VMLRLog(@"---------- INSTALL DONE ----------");
+}
+
+#pragma mark - Start
+
+static void VMLStart(void) {
+
     NSString *bundle =
         NSBundle.mainBundle.bundleIdentifier ?: @"";
 
@@ -511,61 +414,70 @@ static void VMLStartRuntimeSniffer(void) {
     if (![bundle isEqualToString:@"vn.vietmap.live"])
         return;
 
-    gVMLHooked =
-        [NSMutableSet new];
-
-    VMLRLog(@"========================================");
-    VMLRLog(@"VML RUNTIME SNIFFER START");
+    VMLRLog(@"======================================");
+    VMLRLog(@"VML RUNTIME SNIFFER V2");
     VMLRLog(@"bundle=%@", bundle);
     VMLRLog(@"process=%@", process);
     VMLRLog(@"home=%@", NSHomeDirectory());
     VMLRLog(@"log=%@", VMLRuntimeLogPath());
-    VMLRLog(@"========================================");
+    VMLRLog(@"======================================");
 
     /*
-     * Flutter/native frameworks can appear later,
-     * so scan several times.
+     * Try several times because frameworks may load
+     * after tweak constructor runs.
      */
 
     dispatch_after(
         dispatch_time(
             DISPATCH_TIME_NOW,
-            2 * NSEC_PER_SEC
+            1 * NSEC_PER_SEC
         ),
         dispatch_get_main_queue(),
         ^{
-            VMLRLog(@"SCAN +2 sec");
-            VMLScanRuntime();
+            VMLRLog(@"INSTALL +1 sec");
+            VMLInstallHooks();
         }
     );
 
     dispatch_after(
         dispatch_time(
             DISPATCH_TIME_NOW,
-            6 * NSEC_PER_SEC
+            4 * NSEC_PER_SEC
         ),
         dispatch_get_main_queue(),
         ^{
-            VMLRLog(@"SCAN +6 sec");
-            VMLScanRuntime();
+            VMLRLog(@"INSTALL +4 sec");
+            VMLInstallHooks();
         }
     );
 
     dispatch_after(
         dispatch_time(
             DISPATCH_TIME_NOW,
-            12 * NSEC_PER_SEC
+            8 * NSEC_PER_SEC
         ),
         dispatch_get_main_queue(),
         ^{
-            VMLRLog(@"SCAN +12 sec");
-            VMLScanRuntime();
+            VMLRLog(@"INSTALL +8 sec");
+            VMLInstallHooks();
+        }
+    );
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            15 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLRLog(@"INSTALL +15 sec");
+            VMLInstallHooks();
         }
     );
 }
 
 %ctor {
     @autoreleasepool {
-        VMLStartRuntimeSniffer();
+        VMLStart();
     }
 }
