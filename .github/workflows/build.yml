@@ -14,20 +14,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Theos
+      - name: Install Theos + iOS 16.5 SDK
         run: |
           export THEOS=$HOME/theos
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
 
-      - name: Install Theos
-        run: |
-          export THEOS=$HOME/theos
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
+          curl -fsSL \
+            https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos \
+            -o install-theos.sh
 
-      - name: Build RootHide package
-        run: |
-          export THEOS=$HOME/theos
-          make clean package FINALPACKAGE=1
+          gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" \
+            -i install-theos.sh
+
+          bash install-theos.sh
+
+          curl -L \
+            https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz \
+            -o $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+
+          xz -d $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar \
+            -C $THEOS/sdks
+
+          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
+
+          ls -la $THEOS/sdks
 
       - name: Build RootHide package
         run: |
