@@ -7,7 +7,6 @@ static UIView *gVMLBubble = nil;
 static UILabel *gVMLLabel = nil;
 // ===== CHỈNH KÍCH THƯỚC Ở ĐÂY =====
 static CGFloat kIPhoneBubbleSize = 64.0;
-stat
 
 @interface VMLBubbleController : NSObject
 - (void)handlePan:(UIPanGestureRecognizer *)pan;
