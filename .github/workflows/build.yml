@@ -14,30 +14,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Theos + iOS 16.5 SDK
+      - name: Install dependencies
+        run: |
+          brew install ldid xz
+
+      - name: Clone RootHide Theos
         run: |
           export THEOS=$HOME/theos
+          git clone --recursive https://github.com/roothide/theos.git $THEOS
 
-          curl -fsSL \
-            https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos \
-            -o install-theos.sh
-
-          sed -E -i '' '/get_sdks/d' install-theos.sh
-
-          bash install-theos.sh
-
+      - name: Install iOS 16.5 SDK
+        run: |
+          export THEOS=$HOME/theos
           mkdir -p $THEOS/sdks
 
           curl -L \
             https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz \
-            -o $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+            -o /tmp/iPhoneOS16.5.sdk.tar.xz
 
-          xz -d $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar \
+          tar -xJf /tmp/iPhoneOS16.5.sdk.tar.xz \
             -C $THEOS/sdks
-
-          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
 
           ls -la $THEOS/sdks
 
