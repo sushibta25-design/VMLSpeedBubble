@@ -201,12 +201,17 @@ static void VMLUpdateAllKnownBubbles(void) {
             UIApplication *app =
                 UIApplication.sharedApplication;
 
-            for (UIWindow *window
-                 in app.windows) {
+            for (UIScene *scene in app.connectedScenes) {
 
-                VMLUpdateBubbleInView(
-                    window
-                );
+                if (![scene isKindOfClass:UIWindowScene.class])
+                    continue;
+
+                UIWindowScene *windowScene =
+                    (UIWindowScene *)scene;
+
+                for (UIWindow *window in windowScene.windows) {
+                    VMLUpdateBubbleInView(window);
+                }
             }
         }
     );
