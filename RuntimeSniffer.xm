@@ -2,7 +2,12 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString * const VMLRuntimeLogPath = @"/var/mobile/VMLRuntime.txt";
+static NSString *VMLRuntimeLogPath(void) {
+    NSString *documents =
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+
+    return [documents stringByAppendingPathComponent:@"VMLRuntime.txt"];
+}
 
 static void VMLRLog(NSString *format, ...) {
     va_list args;
