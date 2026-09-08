@@ -329,8 +329,8 @@ static void VMLAttach99ToDuoHost(
 
     %orig;
 
-    if (!VMLIsCarPlay())
-        return;
+    if (!(VMLIsCarPlay() || VMLIsSpringBoard()))
+    return;
 
     if (gVMLAddingOwnView)
         return;
