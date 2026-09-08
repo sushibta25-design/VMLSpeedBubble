@@ -310,6 +310,8 @@ static void VMLRegister(void) {
         NSString *bundle =
             NSBundle.mainBundle.bundleIdentifier;
 
+        NSLog(@"[VMLSpeedBubble] loaded in bundle=%@", bundle);
+
         if ([bundle isEqualToString:@"com.apple.springboard"]) {
             dispatch_after(
                 dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
@@ -317,8 +319,32 @@ static void VMLRegister(void) {
                 ^{
                     VMLRegister();
                     VMLCreateBubble();
+
+                    NSLog(@"[VMLSpeedBubble] UIScreens=%@",
+                          UIScreen.screens);
+
+                    NSLog(@"[VMLSpeedBubble] connectedScenes=%@",
+                          UIApplication.sharedApplication.connectedScenes);
                 }
             );
+
+            [[NSNotificationCenter defaultCenter]
+                addObserverForName:UIScreenDidConnectNotification
+                            object:nil
+                             queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+                            NSLog(@"[VMLSpeedBubble] SCREEN CONNECTED: %@",
+                                  note.object);
+                        }];
+
+            [[NSNotificationCenter defaultCenter]
+                addObserverForName:UIScreenDidDisconnectNotification
+                            object:nil
+                             queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+                            NSLog(@"[VMLSpeedBubble] SCREEN DISCONNECTED: %@",
+                                  note.object);
+                        }];
         }
     }
 }
