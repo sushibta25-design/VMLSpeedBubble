@@ -3,9 +3,8 @@
         Bundles = (
             "vn.vietmap.live",
             "com.apple.springboard",
-            "com.apple.CarPlay",
-            "com.apple.CarPlayApp",
-            "com.apple.CarPlayUI"
+            "com.apple.CarPlayApp"
         );
+        Mode = "Any";
     };
 }
