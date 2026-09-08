@@ -77,14 +77,7 @@ static NSString *VMLSafeDescription(id obj) {
 
 static NSMutableSet *gVMLHooked = nil;
 
-static const void *VMLKeyForMethod(Class cls, SEL sel) {
-    NSString *key =
-        [NSString stringWithFormat:@"%@|%@",
-         NSStringFromClass(cls),
-         NSStringFromSelector(sel)];
 
-    return (__bridge_retained const void *)key;
-}
 
 static IMP VMLOriginalIMP(Class cls, SEL sel) {
     if (!cls || !sel)
