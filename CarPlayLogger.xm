@@ -1,56 +1,153 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 
-static void CPLogState(NSString *reason) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
-        NSString *process = NSProcessInfo.processInfo.processName;
+static NSString *CPLogPath(void) {
+    return @"/var/mobile/CarPlayLog.txt";
+}
 
-        NSLog(@"[CPLOG] ===== %@ =====", reason);
-        NSLog(@"[CPLOG] process=%@", process);
-        NSLog(@"[CPLOG] bundle=%@", bundle);
+static void CPWrite(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
 
-        UIApplication *app = UIApplication.sharedApplication;
+    NSString *line =
+        [[NSString alloc] initWithFormat:format arguments:args];
 
-        NSLog(@"[CPLOG] connectedScenes=%@", app.connectedScenes);
-        NSMutableArray *allWindows = [NSMutableArray array];
+    va_end(args);
 
-for (UIScene *scene in app.connectedScenes) {
-    if ([scene isKindOfClass:[UIWindowScene class]]) {
-        UIWindowScene *ws = (UIWindowScene *)scene;
-        [allWindows addObjectsFromArray:ws.windows];
+    NSString *full =
+        [NSString stringWithFormat:@"%@\n", line];
+
+    NSData *data =
+        [full dataUsingEncoding:NSUTF8StringEncoding];
+
+    NSString *path = CPLogPath();
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [data writeToFile:path atomically:YES];
+        return;
+    }
+
+    NSFileHandle *handle =
+        [NSFileHandle fileHandleForWritingAtPath:path];
+
+    if (handle) {
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+        [handle closeFile];
     }
 }
 
-NSLog(@"[CPLOG] windows=%@", allWindows);
+static void CPLogState(NSString *reason) {
+    dispatch_async(dispatch_get_main_queue(), ^{
 
-        for (UIScene *scene in app.connectedScenes) {
-            NSLog(@"[CPLOG] scene class=%@ state=%ld",
-                  NSStringFromClass(scene.class),
-                  (long)scene.activationState);
+        NSString *bundle =
+            NSBundle.mainBundle.bundleIdentifier ?: @"(nil)";
 
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *ws = (UIWindowScene *)scene;
+        NSString *process =
+            NSProcessInfo.processInfo.processName ?: @"(nil)";
 
-                NSLog(@"[CPLOG] UIWindowScene=%@", ws);
-                NSLog(@"[CPLOG] screen=%@", ws.screen);
-                NSLog(@"[CPLOG] windows=%@", ws.windows);
+        UIApplication *app =
+            UIApplication.sharedApplication;
 
-                for (UIWindow *window in ws.windows) {
-                    NSLog(@"[CPLOG] window=%@ level=%f hidden=%d frame=%@",
-                          window,
-                          window.windowLevel,
-                          window.hidden,
-                          NSStringFromCGRect(window.frame));
+        CPWrite(@"");
+        CPWrite(@"========================================");
+        CPWrite(@"REASON: %@", reason);
+        CPWrite(@"PROCESS: %@", process);
+        CPWrite(@"BUNDLE: %@", bundle);
+        CPWrite(@"========================================");
 
-                    NSLog(@"[CPLOG] rootVC=%@",
-                          window.rootViewController);
-                }
-            }
+        CPWrite(@"UIScreen count: %lu",
+                (unsigned long)UIScreen.screens.count);
+
+        NSInteger screenIndex = 0;
+
+        for (UIScreen *screen in UIScreen.screens) {
+
+            CPWrite(@"SCREEN[%ld]", (long)screenIndex);
+            CPWrite(@"  bounds=%@",
+                    NSStringFromCGRect(screen.bounds));
+            CPWrite(@"  scale=%.2f",
+                    screen.scale);
+            CPWrite(@"  nativeBounds=%@",
+                    NSStringFromCGRect(screen.nativeBounds));
+
+            screenIndex++;
         }
 
-        NSLog(@"[CPLOG] UIScreen.screens=%@", UIScreen.screens);
-        NSLog(@"[CPLOG] =====================");
+        CPWrite(@"Connected scene count: %lu",
+                (unsigned long)app.connectedScenes.count);
+
+        NSInteger sceneIndex = 0;
+
+        for (UIScene *scene in app.connectedScenes) {
+
+            CPWrite(@"");
+            CPWrite(@"SCENE[%ld]", (long)sceneIndex);
+
+            CPWrite(@"  class=%@",
+                    NSStringFromClass(scene.class));
+
+            CPWrite(@"  state=%ld",
+                    (long)scene.activationState);
+
+            CPWrite(@"  role=%@",
+                    scene.session.role);
+
+            CPWrite(@"  persistentIdentifier=%@",
+                    scene.session.persistentIdentifier);
+
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+
+                UIWindowScene *ws =
+                    (UIWindowScene *)scene;
+
+                CPWrite(@"  screen=%@", ws.screen);
+
+                CPWrite(@"  screenBounds=%@",
+                        NSStringFromCGRect(ws.screen.bounds));
+
+                CPWrite(@"  windows=%lu",
+                        (unsigned long)ws.windows.count);
+
+                NSInteger windowIndex = 0;
+
+                for (UIWindow *window in ws.windows) {
+
+                    CPWrite(@"    WINDOW[%ld]",
+                            (long)windowIndex);
+
+                    CPWrite(@"      class=%@",
+                            NSStringFromClass(window.class));
+
+                    CPWrite(@"      frame=%@",
+                            NSStringFromCGRect(window.frame));
+
+                    CPWrite(@"      level=%.2f",
+                            window.windowLevel);
+
+                    CPWrite(@"      hidden=%d",
+                            window.hidden);
+
+                    CPWrite(@"      keyWindow=%d",
+                            window.isKeyWindow);
+
+                    CPWrite(@"      rootVC=%@",
+                            window.rootViewController ?
+                            NSStringFromClass(
+                                window.rootViewController.class
+                            ) :
+                            @"(nil)");
+
+                    windowIndex++;
+                }
+            }
+
+            sceneIndex++;
+        }
+
+        CPWrite(@"");
+        CPWrite(@"========== END ==========");
+        CPWrite(@"");
     });
 }
 
@@ -66,15 +163,22 @@ NSLog(@"[CPLOG] windows=%@", allWindows);
 
 %ctor {
     @autoreleasepool {
-        NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
-        NSString *process = NSProcessInfo.processInfo.processName;
 
-        NSLog(@"[CPLOG] injected process=%@ bundle=%@",
-              process,
-              bundle);
+        NSString *bundle =
+            NSBundle.mainBundle.bundleIdentifier ?: @"(nil)";
+
+        NSString *process =
+            NSProcessInfo.processInfo.processName ?: @"(nil)";
+
+        CPWrite(@"");
+        CPWrite(@"******** LOGGER INJECTED ********");
+        CPWrite(@"PROCESS: %@", process);
+        CPWrite(@"BUNDLE: %@", bundle);
+        CPWrite(@"*********************************");
 
         dispatch_after(
-            dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+            dispatch_time(DISPATCH_TIME_NOW,
+                          5 * NSEC_PER_SEC),
             dispatch_get_main_queue(),
             ^{
                 CPLogState(@"startup");
@@ -86,17 +190,19 @@ NSLog(@"[CPLOG] windows=%@", allWindows);
                         object:nil
                          queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *note) {
-                        NSLog(@"[CPLOG] UISceneWillConnect: %@", note.object);
-                        CPLogState(@"sceneConnect");
-                    }];
+
+            CPWrite(@"EVENT: UISceneWillConnect");
+            CPLogState(@"sceneConnect");
+        }];
 
         [[NSNotificationCenter defaultCenter]
             addObserverForName:UIScreenDidConnectNotification
                         object:nil
                          queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *note) {
-                        NSLog(@"[CPLOG] UIScreenDidConnect: %@", note.object);
-                        CPLogState(@"screenConnect");
-                    }];
+
+            CPWrite(@"EVENT: UIScreenDidConnect");
+            CPLogState(@"screenConnect");
+        }];
     }
 }
