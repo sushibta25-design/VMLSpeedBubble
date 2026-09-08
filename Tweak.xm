@@ -5,15 +5,43 @@
 static UIWindow *gVMLWindow = nil;
 static UIView *gVMLBubble = nil;
 static UILabel *gVMLLabel = nil;
+// ===== CHỈNH KÍCH THƯỚC Ở ĐÂY =====
+static CGFloat kIPhoneBubbleSize = 64.0;
+static CGFloat kCarPlayBubbleSize = 100.0;
 
-@interface VMLPassthroughWindow : UIWindow
+@interface VMLBubbleController : NSObject
+- (void)handlePan:(UIPanGestureRecognizer *)pan;
 @end
 
-@implementation VMLPassthroughWindow
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    return nil; // không chặn touch của app phía dưới
+@implementation VMLBubbleController
+
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    if (!gVMLWindow) return;
+
+    CGPoint translation = [pan translationInView:gVMLWindow];
+
+    CGRect frame = gVMLWindow.frame;
+    frame.origin.x += translation.x;
+    frame.origin.y += translation.y;
+
+    CGRect screen = UIScreen.mainScreen.bounds;
+
+    frame.origin.x = MAX(0,
+        MIN(screen.size.width - frame.size.width,
+            frame.origin.x));
+
+    frame.origin.y = MAX(30,
+        MIN(screen.size.height - frame.size.height,
+            frame.origin.y));
+
+    gVMLWindow.frame = frame;
+
+    [pan setTranslation:CGPointZero inView:gVMLWindow];
 }
+
 @end
+
+static VMLBubbleController *gVMLBubbleController = nil;
 
 static NSInteger VMLFindSpeed(id obj) {
     if (!obj || obj == [NSNull null]) return -1;
@@ -104,47 +132,98 @@ static void VMLCreateBubble(void) {
     UIWindowScene *scene = VMLGetScene();
     if (!scene) return;
 
+    CGFloat size = kIPhoneBubbleSize;
+
+    // Window CHỈ bằng kích thước bong bóng
+    // nên không còn phủ/chặn cảm ứng toàn màn hình.
     gVMLWindow =
-        [[VMLPassthroughWindow alloc] initWithWindowScene:scene];
+        [[UIWindow alloc] initWithWindowScene:scene];
 
-    gVMLWindow.frame = UIScreen.mainScreen.bounds;
-    gVMLWindow.backgroundColor = UIColor.clearColor;
-    gVMLWindow.windowLevel = UIWindowLevelAlert + 1000.0;
+    gVMLWindow.frame =
+        CGRectMake(18.0,
+                   110.0,
+                   size,
+                   size);
 
-    UIViewController *vc = [UIViewController new];
-    vc.view.backgroundColor = UIColor.clearColor;
+    gVMLWindow.backgroundColor =
+        UIColor.clearColor;
+
+    gVMLWindow.windowLevel =
+        UIWindowLevelAlert + 1000.0;
+
+    UIViewController *vc =
+        [UIViewController new];
+
+    vc.view.backgroundColor =
+        UIColor.clearColor;
+
     gVMLWindow.rootViewController = vc;
-
-    CGFloat size = 64.0;
 
     gVMLBubble =
         [[UIView alloc] initWithFrame:
-            CGRectMake(18, 110, size, size)];
+            CGRectMake(0.0,
+                       0.0,
+                       size,
+                       size)];
 
-    gVMLBubble.backgroundColor = UIColor.whiteColor;
-    gVMLBubble.layer.cornerRadius = size / 2.0;
-    gVMLBubble.layer.borderWidth = 6.0;
-    gVMLBubble.layer.borderColor = UIColor.systemRedColor.CGColor;
-    gVMLBubble.userInteractionEnabled = NO;
+    gVMLBubble.backgroundColor =
+        UIColor.whiteColor;
+
+    gVMLBubble.layer.cornerRadius =
+        size / 2.0;
+
+    gVMLBubble.layer.borderWidth =
+        MAX(4.0, size * 0.09);
+
+    gVMLBubble.layer.borderColor =
+        UIColor.systemRedColor.CGColor;
+
+    gVMLBubble.clipsToBounds = YES;
+
+    // Chỉ bong bóng nhận touch để kéo
+    gVMLBubble.userInteractionEnabled = YES;
 
     gVMLLabel =
-        [[UILabel alloc] initWithFrame:gVMLBubble.bounds];
+        [[UILabel alloc] initWithFrame:
+            gVMLBubble.bounds];
 
     gVMLLabel.autoresizingMask =
         UIViewAutoresizingFlexibleWidth |
         UIViewAutoresizingFlexibleHeight;
 
     gVMLLabel.text = @"50";
-    gVMLLabel.textAlignment = NSTextAlignmentCenter;
-    gVMLLabel.textColor = UIColor.blackColor;
+
+    gVMLLabel.textAlignment =
+        NSTextAlignmentCenter;
+
+    gVMLLabel.textColor =
+        UIColor.blackColor;
+
     gVMLLabel.font =
-        [UIFont systemFontOfSize:27.0 weight:UIFontWeightBold];
+        [UIFont systemFontOfSize:
+            size * 0.42
+                         weight:UIFontWeightBold];
+
+    // Label không cản gesture của bong bóng
     gVMLLabel.userInteractionEnabled = NO;
 
     [gVMLBubble addSubview:gVMLLabel];
     [vc.view addSubview:gVMLBubble];
 
+    gVMLBubbleController =
+        [VMLBubbleController new];
+
+    UIPanGestureRecognizer *pan =
+        [[UIPanGestureRecognizer alloc]
+            initWithTarget:gVMLBubbleController
+                    action:@selector(handlePan:)];
+
+    [gVMLBubble addGestureRecognizer:pan];
+
     gVMLWindow.hidden = NO;
+
+    NSLog(@"[VMLSpeedBubble] bubble created size=%.0f",
+          size);
 }
 
 static void VMLCallback(
