@@ -2,128 +2,45 @@
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
 
-#pragma mark - Globals
-
 static UIWindow *gVMLWindow = nil;
 static UIView *gVMLBubble = nil;
 static UILabel *gVMLLabel = nil;
 
-#pragma mark - Pass-through root view
-
-@interface VMLPassThroughView : UIView
+@interface VMLPassthroughWindow : UIWindow
 @end
 
-@implementation VMLPassThroughView
-
+@implementation VMLPassthroughWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hit = [super hitTest:point withEvent:event];
-
-    if (hit == self) {
-        return nil;
-    }
-
-    return hit;
+    return nil; // không chặn touch của app phía dưới
 }
-
 @end
-
-#pragma mark - Bubble drag controller
-
-@interface VMLBubbleDragController : NSObject
-- (void)handlePan:(UIPanGestureRecognizer *)pan;
-@end
-
-@implementation VMLBubbleDragController
-
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    UIView *bubble = pan.view;
-
-    if (!bubble || !bubble.superview) {
-        return;
-    }
-
-    CGPoint translation =
-        [pan translationInView:bubble.superview];
-
-    CGPoint center = bubble.center;
-
-    center.x += translation.x;
-    center.y += translation.y;
-
-    CGRect bounds = bubble.superview.bounds;
-
-    CGFloat halfW =
-        bubble.bounds.size.width / 2.0;
-
-    CGFloat halfH =
-        bubble.bounds.size.height / 2.0;
-
-    center.x =
-        MAX(halfW + 5.0,
-            MIN(bounds.size.width - halfW - 5.0,
-                center.x));
-
-    center.y =
-        MAX(halfH + 35.0,
-            MIN(bounds.size.height - halfH - 15.0,
-                center.y));
-
-    bubble.center = center;
-
-    [pan setTranslation:CGPointZero
-                 inView:bubble.superview];
-}
-
-@end
-
-static VMLBubbleDragController *gVMLDragController = nil;
-
-#pragma mark - Recursive speed finder
 
 static NSInteger VMLFindSpeed(id obj) {
-    if (!obj || obj == [NSNull null]) {
-        return -1;
-    }
+    if (!obj || obj == [NSNull null]) return -1;
 
     if ([obj isKindOfClass:[NSDictionary class]]) {
-        NSDictionary *dict =
-            (NSDictionary *)obj;
+        NSDictionary *dict = (NSDictionary *)obj;
 
         for (id key in dict) {
-            NSString *keyString =
-                [[key description] lowercaseString];
-
+            NSString *k = [[key description] lowercaseString];
             id value = dict[key];
 
-            BOOL looksLikeSpeed =
-                [keyString containsString:@"speedlimit"] ||
-                [keyString containsString:@"speed_limit"] ||
-                [keyString containsString:@"speed limit"] ||
-                [keyString containsString:@"maxspeed"] ||
-                [keyString containsString:@"speedlimitvalue"];
+            BOOL match =
+                [k containsString:@"speedlimit"] ||
+                [k containsString:@"speed_limit"] ||
+                [k containsString:@"maxspeed"];
 
-            if (looksLikeSpeed &&
-                [value respondsToSelector:@selector(integerValue)]) {
-
-                NSInteger speed =
-                    [value integerValue];
-
-                if (speed >= 5 &&
-                    speed <= 200) {
-
-                    return speed;
-                }
+            if (match && [value respondsToSelector:@selector(integerValue)]) {
+                NSInteger v = [value integerValue];
+                if (v >= 5 && v <= 200) return v;
             }
 
-            NSInteger nested =
-                VMLFindSpeed(value);
-
+            NSInteger nested = VMLFindSpeed(value);
             if (nested > 0 &&
-                ([keyString containsString:@"speed"] ||
-                 [keyString containsString:@"limit"] ||
-                 [keyString containsString:@"road"] ||
-                 [keyString containsString:@"warning"])) {
-
+                ([k containsString:@"speed"] ||
+                 [k containsString:@"limit"] ||
+                 [k containsString:@"road"] ||
+                 [k containsString:@"warning"])) {
                 return nested;
             }
         }
@@ -131,73 +48,44 @@ static NSInteger VMLFindSpeed(id obj) {
 
     if ([obj isKindOfClass:[NSArray class]]) {
         for (id item in (NSArray *)obj) {
-            NSInteger speed =
-                VMLFindSpeed(item);
-
-            if (speed > 0) {
-                return speed;
-            }
+            NSInteger v = VMLFindSpeed(item);
+            if (v > 0) return v;
         }
     }
 
     return -1;
 }
 
-#pragma mark - IPC
-
 static void VMLSendSpeed(NSInteger speed) {
-    if (speed < 5 ||
-        speed > 200) {
+    if (speed < 5 || speed > 200) return;
 
-        return;
-    }
-
-    NSString *notificationName =
+    NSString *name =
         [NSString stringWithFormat:
             @"com.sushibta.vmlspeedbubble.speed.%ld",
             (long)speed];
 
-    NSLog(@"[VMLSpeed] send = %ld",
-          (long)speed);
-
     CFNotificationCenterPostNotification(
         CFNotificationCenterGetDarwinNotifyCenter(),
-        (__bridge CFStringRef)notificationName,
+        (__bridge CFStringRef)name,
         NULL,
         NULL,
         true
     );
 }
 
-#pragma mark - Bubble UI
-
-static UIWindowScene *VMLGetWindowScene(void) {
-    NSSet *scenes =
-        UIApplication.sharedApplication.connectedScenes;
-
-    for (UIScene *scene in scenes) {
-        if ([scene isKindOfClass:
-                [UIWindowScene class]] &&
-            scene.activationState !=
-                UISceneActivationStateUnattached) {
-
+static UIWindowScene *VMLGetScene(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] &&
+            scene.activationState != UISceneActivationStateUnattached) {
             return (UIWindowScene *)scene;
         }
     }
-
     return nil;
 }
 
-static void VMLSetBubbleSpeed(NSInteger speed) {
-    dispatch_async(
-        dispatch_get_main_queue(),
-        ^{
-
-        if (!gVMLBubble ||
-            !gVMLLabel) {
-
-            return;
-        }
+static void VMLSetSpeed(NSInteger speed) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gVMLBubble || !gVMLLabel) return;
 
         if (speed <= 0) {
             gVMLBubble.hidden = YES;
@@ -205,206 +93,101 @@ static void VMLSetBubbleSpeed(NSInteger speed) {
         }
 
         gVMLBubble.hidden = NO;
-
         gVMLLabel.text =
-            [NSString stringWithFormat:
-                @"%ld",
-                (long)speed];
-
-        NSLog(@"[VMLSpeedBubble] display = %ld",
-              (long)speed);
+            [NSString stringWithFormat:@"%ld", (long)speed];
     });
 }
 
 static void VMLCreateBubble(void) {
-    if (gVMLWindow) {
-        return;
-    }
+    if (gVMLWindow) return;
 
-    UIWindowScene *scene =
-        VMLGetWindowScene();
-
-    if (!scene) {
-        NSLog(@"[VMLSpeedBubble] UIWindowScene not found");
-        return;
-    }
+    UIWindowScene *scene = VMLGetScene();
+    if (!scene) return;
 
     gVMLWindow =
-        [[UIWindow alloc]
-            initWithWindowScene:scene];
+        [[VMLPassthroughWindow alloc] initWithWindowScene:scene];
 
-    gVMLWindow.frame =
-        UIScreen.mainScreen.bounds;
+    gVMLWindow.frame = UIScreen.mainScreen.bounds;
+    gVMLWindow.backgroundColor = UIColor.clearColor;
+    gVMLWindow.windowLevel = UIWindowLevelAlert + 1000.0;
 
-    gVMLWindow.backgroundColor =
-        UIColor.clearColor;
-
-    gVMLWindow.windowLevel =
-        UIWindowLevelAlert + 1000.0;
-
-    UIViewController *root =
-        [UIViewController new];
-
-    VMLPassThroughView *rootView =
-        [[VMLPassThroughView alloc]
-            initWithFrame:
-                gVMLWindow.bounds];
-
-    rootView.backgroundColor =
-        UIColor.clearColor;
-
-    root.view = rootView;
-
-    gVMLWindow.rootViewController =
-        root;
+    UIViewController *vc = [UIViewController new];
+    vc.view.backgroundColor = UIColor.clearColor;
+    gVMLWindow.rootViewController = vc;
 
     CGFloat size = 64.0;
 
     gVMLBubble =
-        [[UIView alloc]
-            initWithFrame:
-                CGRectMake(
-                    18.0,
-                    110.0,
-                    size,
-                    size)];
+        [[UIView alloc] initWithFrame:
+            CGRectMake(18, 110, size, size)];
 
-    gVMLBubble.backgroundColor =
-        UIColor.whiteColor;
-
-    gVMLBubble.layer.cornerRadius =
-        size / 2.0;
-
-    gVMLBubble.layer.borderWidth =
-        6.0;
-
-    gVMLBubble.layer.borderColor =
-        UIColor.systemRedColor.CGColor;
-
-    gVMLBubble.clipsToBounds =
-        YES;
+    gVMLBubble.backgroundColor = UIColor.whiteColor;
+    gVMLBubble.layer.cornerRadius = size / 2.0;
+    gVMLBubble.layer.borderWidth = 6.0;
+    gVMLBubble.layer.borderColor = UIColor.systemRedColor.CGColor;
+    gVMLBubble.userInteractionEnabled = NO;
 
     gVMLLabel =
-        [[UILabel alloc]
-            initWithFrame:
-                gVMLBubble.bounds];
+        [[UILabel alloc] initWithFrame:gVMLBubble.bounds];
 
     gVMLLabel.autoresizingMask =
         UIViewAutoresizingFlexibleWidth |
         UIViewAutoresizingFlexibleHeight;
 
-    gVMLLabel.text =
-        @"50";
-
-    gVMLLabel.textAlignment =
-        NSTextAlignmentCenter;
-
-    gVMLLabel.textColor =
-        UIColor.blackColor;
-
+    gVMLLabel.text = @"50";
+    gVMLLabel.textAlignment = NSTextAlignmentCenter;
+    gVMLLabel.textColor = UIColor.blackColor;
     gVMLLabel.font =
-        [UIFont systemFontOfSize:27.0
-                          weight:UIFontWeightBold];
+        [UIFont systemFontOfSize:27.0 weight:UIFontWeightBold];
+    gVMLLabel.userInteractionEnabled = NO;
 
-    [gVMLBubble
-        addSubview:gVMLLabel];
+    [gVMLBubble addSubview:gVMLLabel];
+    [vc.view addSubview:gVMLBubble];
 
-    gVMLDragController =
-        [VMLBubbleDragController new];
-
-    UIPanGestureRecognizer *pan =
-        [[UIPanGestureRecognizer alloc]
-            initWithTarget:gVMLDragController
-                    action:@selector(handlePan:)];
-
-    [gVMLBubble
-        addGestureRecognizer:pan];
-
-    [rootView
-        addSubview:gVMLBubble];
-
-    /*
-     * Bản test đầu tiên cố tình hiện 50
-     * để xác nhận UI + SpringBoard injection chạy.
-     */
-    gVMLBubble.hidden = NO;
-
-    [gVMLWindow makeKeyAndVisible];
-
-    NSLog(@"[VMLSpeedBubble] bubble created");
+    gVMLWindow.hidden = NO;
 }
 
-#pragma mark - Darwin callback
-
-static void VMLSpeedNotificationCallback(
+static void VMLCallback(
     CFNotificationCenterRef center,
     void *observer,
     CFStringRef name,
     const void *object,
     CFDictionaryRef userInfo)
 {
-    NSString *notification =
-        (__bridge NSString *)name;
-
+    NSString *n = (__bridge NSString *)name;
     NSString *prefix =
         @"com.sushibta.vmlspeedbubble.speed.";
 
-    if (![notification
-            hasPrefix:prefix]) {
-
-        return;
-    }
-
-    NSString *value =
-        [notification
-            substringFromIndex:
-                prefix.length];
+    if (![n hasPrefix:prefix]) return;
 
     NSInteger speed =
-        value.integerValue;
+        [[n substringFromIndex:prefix.length] integerValue];
 
-    if (speed >= 5 &&
-        speed <= 200) {
-
-        VMLSetBubbleSpeed(speed);
-    }
+    VMLSetSpeed(speed);
 }
 
-static void VMLRegisterNotifications(void) {
-    CFNotificationCenterRef center =
-        CFNotificationCenterGetDarwinNotifyCenter();
-
-    for (NSInteger speed = 5;
-         speed <= 200;
-         speed += 5) {
-
+static void VMLRegister(void) {
+    for (NSInteger speed = 5; speed <= 200; speed += 5) {
         NSString *name =
             [NSString stringWithFormat:
                 @"com.sushibta.vmlspeedbubble.speed.%ld",
                 (long)speed];
 
         CFNotificationCenterAddObserver(
-            center,
+            CFNotificationCenterGetDarwinNotifyCenter(),
             NULL,
-            VMLSpeedNotificationCallback,
+            VMLCallback,
             (__bridge CFStringRef)name,
             NULL,
             CFNotificationSuspensionBehaviorDeliverImmediately
         );
     }
-
-    NSLog(@"[VMLSpeedBubble] notifications registered");
 }
-
-#pragma mark - VietMap / Flutter logger
 
 %hook FlutterMethodChannel
 
-- (void)invokeMethod:(NSString *)method
-           arguments:(id)arguments
-{
-    NSString *lower =
-        [method.lowercaseString copy];
+- (void)invokeMethod:(NSString *)method arguments:(id)arguments {
+    NSString *lower = method.lowercaseString;
 
     if ([lower containsString:@"speed"] ||
         [lower containsString:@"limit"] ||
@@ -412,19 +195,10 @@ static void VMLRegisterNotifications(void) {
         [lower containsString:@"warning"] ||
         [lower containsString:@"navigation"]) {
 
-        NSLog(@"[VMLSpeed:channel] method=%@ args=%@",
-              method,
-              arguments);
+        NSLog(@"[VMLSpeed] %@ -> %@", method, arguments);
 
-        NSInteger speed =
-            VMLFindSpeed(arguments);
-
-        if (speed > 0) {
-            NSLog(@"[VMLSpeed] detected=%ld",
-                  (long)speed);
-
-            VMLSendSpeed(speed);
-        }
+        NSInteger speed = VMLFindSpeed(arguments);
+        if (speed > 0) VMLSendSpeed(speed);
     }
 
     %orig;
@@ -432,10 +206,9 @@ static void VMLRegisterNotifications(void) {
 
 - (void)invokeMethod:(NSString *)method
            arguments:(id)arguments
-              result:(id)callback
-{
-    NSString *lower =
-        [method.lowercaseString copy];
+              result:(id)callback {
+
+    NSString *lower = method.lowercaseString;
 
     if ([lower containsString:@"speed"] ||
         [lower containsString:@"limit"] ||
@@ -443,19 +216,10 @@ static void VMLRegisterNotifications(void) {
         [lower containsString:@"warning"] ||
         [lower containsString:@"navigation"]) {
 
-        NSLog(@"[VMLSpeed:channel-result] method=%@ args=%@",
-              method,
-              arguments);
+        NSLog(@"[VMLSpeed] %@ -> %@", method, arguments);
 
-        NSInteger speed =
-            VMLFindSpeed(arguments);
-
-        if (speed > 0) {
-            NSLog(@"[VMLSpeed] detected=%ld",
-                  (long)speed);
-
-            VMLSendSpeed(speed);
-        }
+        NSInteger speed = VMLFindSpeed(arguments);
+        if (speed > 0) VMLSendSpeed(speed);
     }
 
     %orig;
@@ -463,32 +227,20 @@ static void VMLRegisterNotifications(void) {
 
 %end
 
-#pragma mark - Constructor
-
 %ctor {
     @autoreleasepool {
-        NSString *bundleID =
+        NSString *bundle =
             NSBundle.mainBundle.bundleIdentifier;
 
-        NSLog(@"[VMLSpeedBubble] injected into %@",
-              bundleID);
-
-        if ([bundleID
-                isEqualToString:
-                    @"com.apple.springboard"]) {
-
+        if ([bundle isEqualToString:@"com.apple.springboard"]) {
             dispatch_after(
-                dispatch_time(
-                    DISPATCH_TIME_NOW,
-                    (int64_t)(
-                        3.0 *
-                        NSEC_PER_SEC)),
+                dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
                 dispatch_get_main_queue(),
                 ^{
-
-                VMLRegisterNotifications();
-                VMLCreateBubble();
-            });
+                    VMLRegister();
+                    VMLCreateBubble();
+                }
+            );
         }
     }
 }
