@@ -356,9 +356,17 @@ static void VMLAttach99ToDuoHost(
     UIView *host =
         view.superview;
 
-    VMLLog(
-        @"INTERCEPTED CNABBubbleView"
-    );
+    NSString *bundle =
+    NSBundle.mainBundle.bundleIdentifier ?: @"";
+
+NSString *process =
+    NSProcessInfo.processInfo.processName ?: @"";
+
+VMLLog(
+    @"INTERCEPTED CNABBubbleView bundle=%@ process=%@",
+    bundle,
+    process
+);
 
     VMLDumpHost(
         host,
