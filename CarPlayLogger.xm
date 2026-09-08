@@ -13,7 +13,16 @@ static void CPLogState(NSString *reason) {
         UIApplication *app = UIApplication.sharedApplication;
 
         NSLog(@"[CPLOG] connectedScenes=%@", app.connectedScenes);
-        NSLog(@"[CPLOG] windows=%@", app.windows);
+        NSMutableArray *allWindows = [NSMutableArray array];
+
+for (UIScene *scene in app.connectedScenes) {
+    if ([scene isKindOfClass:[UIWindowScene class]]) {
+        UIWindowScene *ws = (UIWindowScene *)scene;
+        [allWindows addObjectsFromArray:ws.windows];
+    }
+}
+
+NSLog(@"[CPLOG] windows=%@", allWindows);
 
         for (UIScene *scene in app.connectedScenes) {
             NSLog(@"[CPLOG] scene class=%@ state=%ld",
