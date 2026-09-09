@@ -36,7 +36,7 @@ static void VMLLog(NSString *format, ...) {
 
     va_end(args);
 
-    NSLog(@"[VMLV10] %@", msg);
+    NSLog(@"[VMLV11] %@", msg);
 
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
@@ -77,6 +77,11 @@ static BOOL VMLNear(
     return fabs(a - b) <= tolerance;
 }
 
+// Legacy heuristic kept ONLY as a last-resort fallback. This hardcoded size
+// (~640x240pt) matches some head units over wireless CarPlay but is NOT
+// reliable for wired CarPlay, where reported window/point size can differ
+// a lot depending on the head unit and cable/adapter. Do not rely on this
+// as the primary detector anymore.
 static BOOL VMLLooksLikeCarPlaySize(
     CGSize size
 ) {
@@ -89,6 +94,22 @@ static BOOL VMLLooksLikeCarPlaySize(
         VMLNear(size.height, 640.0, 45.0);
 
     return landscape || rotated;
+}
+
+// A CarPlay root window always lives on the CarPlay UIScreen, which is a
+// screen distinct from the phone's own UIScreen.mainScreen. This is true
+// for BOTH wired and wireless CarPlay and does not depend on resolution,
+// so it is a far more reliable signal than guessing pixel dimensions.
+static BOOL VMLIsExternalCarPlayScreen(
+    UIScreen *screen
+) {
+    if (!screen)
+        return NO;
+
+    if (screen == UIScreen.mainScreen)
+        return NO;
+
+    return YES;
 }
 
 static BOOL VMLIsCarPlayRootWindow(
@@ -107,6 +128,16 @@ static BOOL VMLIsCarPlayRootWindow(
         return NO;
     }
 
+    // Primary check: window is hosted on a non-main (i.e. CarPlay) screen.
+    // Works identically for wired and wireless CarPlay, on any head unit
+    // resolution/orientation.
+    if (VMLIsExternalCarPlayScreen(window.screen)) {
+        return YES;
+    }
+
+    // Fallback for edge cases where `window.screen` isn't populated yet
+    // (e.g. very early lifecycle callbacks): fall back to the old size
+    // heuristic so we don't regress previously-working wireless behavior.
     return
         VMLLooksLikeCarPlaySize(
             window.bounds.size
@@ -486,6 +517,33 @@ static UIView *VMLFindFallbackHostRecursive(
     return nil;
 }
 
+// Last-resort host: if neither the known VisualEffect host nor the
+// size-based fallback matched (e.g. a wired head unit with a very
+// different internal view hierarchy), just use the CarPlay root
+// window's own root view controller view as the host so the bubble
+// still has somewhere to attach.
+static UIView *VMLFindLastResortHost(
+    UIWindow *root
+) {
+    if (!root)
+        return nil;
+
+    UIView *view =
+        root.rootViewController.view ?:
+        (root.subviews.firstObject ?: root);
+
+    if (!view)
+        return nil;
+
+    if (view.bounds.size.width < 100.0 ||
+        view.bounds.size.height < 60.0) {
+
+        return nil;
+    }
+
+    return view;
+}
+
 #pragma mark - Attach CarPlay bubble
 
 static void VMLAttachCarPlayBubble(
@@ -709,6 +767,32 @@ static void VMLProcessCarPlayRoot(
         return;
     }
 
+    UIView *lastResort =
+        VMLFindLastResortHost(
+            root
+        );
+
+    if (lastResort) {
+        VMLLog(
+            @"*** LAST-RESORT HOST USED reason=%@ class=%@ frame=%@ rootHidden=%d ***",
+            reason,
+            NSStringFromClass(
+                lastResort.class
+            ),
+            NSStringFromCGRect(
+                lastResort.frame
+            ),
+            root.hidden
+        );
+
+        VMLAttachCarPlayBubble(
+            lastResort,
+            @"lastResortHost"
+        );
+
+        return;
+    }
+
     VMLLog(
         @"CARPLAY ROOT FOUND BUT HOST NOT FOUND reason=%@ rootFrame=%@ rootBounds=%@ hidden=%d subviews=%lu",
         reason,
@@ -855,6 +939,28 @@ static void VMLStartScanner(void) {
 
 %end
 
+// Also react to scene connect/disconnect notifications, so a wired
+// CarPlay session that appears without a matching UIView lifecycle
+// event still gets scanned immediately instead of waiting up to 1s
+// for the polling scanner.
+%hook UIWindowScene
+
+- (void)setActivationState:(UISceneActivationState)state {
+    %orig;
+
+    if (!VMLIsSpringBoard())
+        return;
+
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            VMLScanScenes();
+        }
+    );
+}
+
+%end
+
 #pragma mark - Phone scene
 
 static UIWindowScene *VMLPhoneScene(void) {
@@ -874,8 +980,10 @@ static UIWindowScene *VMLPhoneScene(void) {
         UIWindowScene *ws =
             (UIWindowScene *)scene;
 
-        if (VMLLooksLikeCarPlaySize(
-                ws.screen.bounds.size)) {
+        // Skip any scene that lives on a non-main (CarPlay) screen,
+        // regardless of wired/wireless connection or resolution.
+        if (VMLIsExternalCarPlayScreen(
+                ws.screen)) {
 
             continue;
         }
@@ -969,7 +1077,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"VML CARPLAY RENDER + ACTIVE SCANNER V10"
+            @"VML CARPLAY RENDER + ACTIVE SCANNER V11 (wired+wireless)"
         );
 
         VMLLog(
@@ -1010,7 +1118,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"V10 ACTIVE"
+            @"V11 ACTIVE"
         );
     }
 }
