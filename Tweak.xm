@@ -2,15 +2,13 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <notify.h>
 #import <math.h>
 
 #pragma mark - Globals
 
 static UIWindow *gPhoneWindow = nil;
-
-static __weak UIWindow *gCarPlayRoot = nil;
-static __weak UIView *gBestPresentationView = nil;
 
 static NSInteger gCurrentSpeed = 0;
 static int gSpeedNotifyToken = 0;
@@ -34,7 +32,7 @@ static void VMLLog(NSString *format, ...) {
 
     va_end(args);
 
-    NSLog(@"[VMLV9] %@", msg);
+    NSLog(@"[VMLV9.1] %@", msg);
 
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
@@ -78,34 +76,31 @@ static BOOL VMLNear(
 static BOOL VMLLooksLikeCarPlaySize(
     CGSize size
 ) {
-    BOOL a =
-        VMLNear(size.width, 640.0, 40.0) &&
-        VMLNear(size.height, 240.0, 40.0);
-
-    BOOL b =
-        VMLNear(size.width, 240.0, 40.0) &&
-        VMLNear(size.height, 640.0, 40.0);
-
-    return a || b;
-}
-
-static BOOL VMLIsCarPlayRootWindow(
-    UIWindow *window
-) {
-    if (!window)
-        return NO;
-
-    if (![NSStringFromClass(window.class)
-            isEqualToString:
-                @"UIRootSceneWindow"]) {
-
-        return NO;
-    }
-
-    return
-        VMLLooksLikeCarPlaySize(
-            window.bounds.size
+    BOOL landscape =
+        VMLNear(
+            size.width,
+            640.0,
+            60.0
+        ) &&
+        VMLNear(
+            size.height,
+            240.0,
+            60.0
         );
+
+    BOOL rotated =
+        VMLNear(
+            size.width,
+            240.0,
+            60.0
+        ) &&
+        VMLNear(
+            size.height,
+            640.0,
+            60.0
+        );
+
+    return landscape || rotated;
 }
 
 #pragma mark - Speed
@@ -235,8 +230,14 @@ static void VMLReadSpeed(void) {
             &state
         );
 
-    if (status != NOTIFY_STATUS_OK)
+    if (status != NOTIFY_STATUS_OK) {
+        VMLLog(
+            @"notify_get_state failed=%u",
+            status
+        );
+
         return;
+    }
 
     NSInteger speed =
         (NSInteger)state;
@@ -306,9 +307,155 @@ static void VMLStartSpeedReceiver(void) {
     VMLReadSpeed();
 }
 
-#pragma mark - Diagnostics
+#pragma mark - Safe dynamic getters
 
-static void VMLLogChain(
+static id VMLCallObjectGetter(
+    id object,
+    NSString *selectorName
+) {
+    if (!object)
+        return nil;
+
+    SEL selector =
+        NSSelectorFromString(
+            selectorName
+        );
+
+    if (![object
+            respondsToSelector:
+                selector]) {
+
+        return nil;
+    }
+
+    return
+        ((id (*)(id, SEL))
+         objc_msgSend)(
+            object,
+            selector
+        );
+}
+
+static void VMLLogObjectGetter(
+    NSString *prefix,
+    id object,
+    NSString *selectorName
+) {
+    id value =
+        VMLCallObjectGetter(
+            object,
+            selectorName
+        );
+
+    if (!value)
+        return;
+
+    VMLLog(
+        @"%@ getter=%@ valueClass=%@ value=%@",
+        prefix,
+        selectorName,
+        NSStringFromClass(
+            [value class]
+        ),
+        value
+    );
+}
+
+#pragma mark - Screen / window diagnostics
+
+static void VMLLogScreen(
+    NSString *prefix,
+    UIScreen *screen
+) {
+    if (!screen) {
+        VMLLog(
+            @"%@ SCREEN=nil",
+            prefix
+        );
+
+        return;
+    }
+
+    VMLLog(
+        @"%@ SCREEN class=%@ bounds=%@ nativeBounds=%@ scale=%.3f nativeScale=%.3f",
+        prefix,
+        NSStringFromClass(
+            screen.class
+        ),
+        NSStringFromCGRect(
+            screen.bounds
+        ),
+        NSStringFromCGRect(
+            screen.nativeBounds
+        ),
+        screen.scale,
+        screen.nativeScale
+    );
+
+    if (VMLLooksLikeCarPlaySize(
+            screen.bounds.size)) {
+
+        VMLLog(
+            @"*** %@ SCREEN LOOKS LIKE CARPLAY ***",
+            prefix
+        );
+    }
+}
+
+static void VMLLogWindow(
+    NSString *prefix,
+    UIWindow *window
+) {
+    if (!window) {
+        VMLLog(
+            @"%@ WINDOW=nil",
+            prefix
+        );
+
+        return;
+    }
+
+    NSString *role =
+        @"nil";
+
+    UIWindowScene *windowScene =
+        window.windowScene;
+
+    if (windowScene &&
+        windowScene.session) {
+
+        role =
+            windowScene.session.role
+            ?: @"nil";
+    }
+
+    VMLLog(
+        @"%@ WINDOW class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f level=%f role=%@",
+        prefix,
+        NSStringFromClass(
+            window.class
+        ),
+        NSStringFromCGRect(
+            window.frame
+        ),
+        NSStringFromCGRect(
+            window.bounds
+        ),
+        window.hidden,
+        window.alpha,
+        window.windowLevel,
+        role
+    );
+
+    VMLLogScreen(
+        prefix,
+        window.screen
+    );
+}
+
+#pragma mark - View chain
+
+static void VMLLogViewChain(
     UIView *view,
     NSString *prefix
 ) {
@@ -319,7 +466,7 @@ static void VMLLogChain(
         0;
 
     while (current &&
-           depth < 15) {
+           depth < 18) {
 
         VMLLog(
             @"%@ CHAIN depth=%ld class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f super=%@ window=%@",
@@ -355,6 +502,8 @@ static void VMLLogChain(
     }
 }
 
+#pragma mark - Presentation diagnostics
+
 static void VMLInspectPresentationView(
     UIView *view,
     NSString *reason
@@ -365,15 +514,16 @@ static void VMLInspectPresentationView(
     UIWindow *window =
         view.window;
 
-    NSString *className =
-        NSStringFromClass(
-            view.class
-        );
+    VMLLog(
+        @"================================================"
+    );
 
     VMLLog(
-        @"*** PRESENTATION VIEW reason=%@ class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f window=%@ windowFrame=%@ ***",
+        @"*** PRESENTATION INSTANCE reason=%@ class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f super=%@ ***",
         reason,
-        className,
+        NSStringFromClass(
+            view.class
+        ),
         NSStringFromCGRect(
             view.frame
         ),
@@ -382,37 +532,191 @@ static void VMLInspectPresentationView(
         ),
         view.hidden,
         view.alpha,
-        window
+        view.superview
             ? NSStringFromClass(
-                window.class
-            )
-            : @"nil",
-        window
-            ? NSStringFromCGRect(
-                window.frame
+                view.superview.class
             )
             : @"nil"
     );
 
-    if (VMLIsCarPlayRootWindow(window)) {
-        gCarPlayRoot =
-            window;
+    VMLLogWindow(
+        @"PRESENTATION",
+        window
+    );
 
-        gBestPresentationView =
-            view;
+    VMLLogViewChain(
+        view,
+        @"PRESENTATION"
+    );
 
-        VMLLog(
-            @"*** PRESENTATION VIEW IS INSIDE CARPLAY ROOT ***"
+    VMLLogObjectGetter(
+        @"PRESENTATION",
+        view,
+        @"scene"
+    );
+
+    VMLLogObjectGetter(
+        @"PRESENTATION",
+        view,
+        @"screen"
+    );
+
+    VMLLogObjectGetter(
+        @"PRESENTATION",
+        view,
+        @"display"
+    );
+
+    VMLLogObjectGetter(
+        @"PRESENTATION",
+        view,
+        @"displayConfiguration"
+    );
+
+    if (window) {
+        VMLLogObjectGetter(
+            @"WINDOW",
+            window,
+            @"scene"
         );
 
-        VMLLogChain(
-            view,
-            @"PRESENTATION"
+        VMLLogObjectGetter(
+            @"WINDOW",
+            window,
+            @"screen"
+        );
+
+        VMLLogObjectGetter(
+            @"WINDOW",
+            window,
+            @"display"
+        );
+
+        VMLLogObjectGetter(
+            @"WINDOW",
+            window,
+            @"displayConfiguration"
+        );
+    }
+
+    BOOL viewLooksCarPlay =
+        VMLLooksLikeCarPlaySize(
+            view.bounds.size
+        );
+
+    BOOL windowLooksCarPlay =
+        window &&
+        VMLLooksLikeCarPlaySize(
+            window.bounds.size
+        );
+
+    BOOL screenLooksCarPlay =
+        window &&
+        window.screen &&
+        VMLLooksLikeCarPlaySize(
+            window.screen.bounds.size
+        );
+
+    if (viewLooksCarPlay ||
+        windowLooksCarPlay ||
+        screenLooksCarPlay) {
+
+        VMLLog(
+            @"************************************************"
+        );
+
+        VMLLog(
+            @"*** POSSIBLE CARPLAY PRESENTATION MATCH ***"
+        );
+
+        VMLLog(
+            @"viewMatch=%d windowMatch=%d screenMatch=%d",
+            viewLooksCarPlay,
+            windowLooksCarPlay,
+            screenLooksCarPlay
+        );
+
+        VMLLog(
+            @"************************************************"
         );
     }
 }
 
-#pragma mark - Runtime IMPs
+#pragma mark - Scene VC diagnostics
+
+static void VMLInspectSceneVC(
+    UIViewController *vc,
+    NSString *reason
+) {
+    if (!vc)
+        return;
+
+    UIView *view =
+        vc.view;
+
+    UIWindow *window =
+        view.window;
+
+    VMLLog(
+        @"================================================"
+    );
+
+    VMLLog(
+        @"*** SCENE VC INSTANCE reason=%@ class=%@ view=%@ frame=%@ ***",
+        reason,
+        NSStringFromClass(
+            vc.class
+        ),
+        view
+            ? NSStringFromClass(
+                view.class
+            )
+            : @"nil",
+        view
+            ? NSStringFromCGRect(
+                view.frame
+            )
+            : @"nil"
+    );
+
+    VMLLogWindow(
+        @"SCENEVC",
+        window
+    );
+
+    if (view) {
+        VMLLogViewChain(
+            view,
+            @"SCENEVC"
+        );
+    }
+
+    VMLLogObjectGetter(
+        @"SCENEVC",
+        vc,
+        @"scene"
+    );
+
+    VMLLogObjectGetter(
+        @"SCENEVC",
+        vc,
+        @"screen"
+    );
+
+    VMLLogObjectGetter(
+        @"SCENEVC",
+        vc,
+        @"display"
+    );
+
+    VMLLogObjectGetter(
+        @"SCENEVC",
+        vc,
+        @"displayConfiguration"
+    );
+}
+
+#pragma mark - Runtime hook IMPs
 
 static IMP gOrigPresentationDidMove = NULL;
 
@@ -431,15 +735,19 @@ static void VMLPresentationDidMove(
     if (!VMLIsSpringBoard())
         return;
 
-    if (![self isKindOfClass:UIView.class])
+    if (![self
+            isKindOfClass:
+                UIView.class]) {
+
         return;
+    }
 
     UIView *view =
         (UIView *)self;
 
     VMLInspectPresentationView(
         view,
-        @"didMoveToWindow"
+        @"_UIScenePresentationView.didMoveToWindow"
     );
 }
 
@@ -469,43 +777,13 @@ static void VMLSceneVCViewDidAppear(
         return;
     }
 
-    UIViewController *vc =
-        (UIViewController *)self;
-
-    UIView *view =
-        vc.view;
-
-    VMLLog(
-        @"*** SCENE VC APPEARED class=%@ view=%@ frame=%@ window=%@ ***",
-        NSStringFromClass(
-            vc.class
-        ),
-        view
-            ? NSStringFromClass(
-                view.class
-            )
-            : @"nil",
-        view
-            ? NSStringFromCGRect(
-                view.frame
-            )
-            : @"nil",
-        view.window
-            ? NSStringFromClass(
-                view.window.class
-            )
-            : @"nil"
+    VMLInspectSceneVC(
+        (UIViewController *)self,
+        @"viewDidAppear:"
     );
-
-    if (view) {
-        VMLInspectPresentationView(
-            view,
-            @"sceneVC:viewDidAppear"
-        );
-    }
 }
 
-#pragma mark - Runtime hook installation
+#pragma mark - Install hooks
 
 static void VMLInstallPrivateHooks(void) {
     if (!VMLIsSpringBoard())
@@ -516,46 +794,50 @@ static void VMLInstallPrivateHooks(void) {
             "_UIScenePresentationView"
         );
 
-    if (presentationClass &&
-        !gInstalledPresentationHook) {
+    if (presentationClass) {
+        if (!gInstalledPresentationHook) {
+            SEL selector =
+                @selector(didMoveToWindow);
 
-        SEL sel =
-            @selector(didMoveToWindow);
-
-        Method method =
-            class_getInstanceMethod(
-                presentationClass,
-                sel
-            );
-
-        if (method) {
-            IMP current =
-                method_getImplementation(
-                    method
+            Method method =
+                class_getInstanceMethod(
+                    presentationClass,
+                    selector
                 );
 
-            if (current !=
-                (IMP)VMLPresentationDidMove) {
+            if (method) {
+                IMP current =
+                    method_getImplementation(
+                        method
+                    );
 
-                gOrigPresentationDidMove =
-                    current;
+                if (current !=
+                    (IMP)VMLPresentationDidMove) {
 
-                method_setImplementation(
-                    method,
-                    (IMP)VMLPresentationDidMove
-                );
+                    gOrigPresentationDidMove =
+                        current;
 
-                gInstalledPresentationHook =
-                    YES;
+                    method_setImplementation(
+                        method,
+                        (IMP)VMLPresentationDidMove
+                    );
 
+                    gInstalledPresentationHook =
+                        YES;
+
+                    VMLLog(
+                        @"HOOKED _UIScenePresentationView didMoveToWindow"
+                    );
+                }
+            } else {
                 VMLLog(
-                    @"HOOKED _UIScenePresentationView didMoveToWindow"
+                    @"_UIScenePresentationView didMoveToWindow method missing"
                 );
             }
         }
-    } else if (!presentationClass) {
+    } else {
         VMLLog(
-            @"_UIScenePresentationView class not loaded yet"
+            @"_UIScenePresentationView class not loaded"
         );
     }
 
@@ -564,51 +846,55 @@ static void VMLInstallPrivateHooks(void) {
             "SBDeviceApplicationSceneViewController"
         );
 
-    if (sceneVCClass &&
-        !gInstalledSceneVCHook) {
+    if (sceneVCClass) {
+        if (!gInstalledSceneVCHook) {
+            SEL selector =
+                @selector(viewDidAppear:);
 
-        SEL sel =
-            @selector(viewDidAppear:);
-
-        Method method =
-            class_getInstanceMethod(
-                sceneVCClass,
-                sel
-            );
-
-        if (method) {
-            IMP current =
-                method_getImplementation(
-                    method
+            Method method =
+                class_getInstanceMethod(
+                    sceneVCClass,
+                    selector
                 );
 
-            if (current !=
-                (IMP)VMLSceneVCViewDidAppear) {
+            if (method) {
+                IMP current =
+                    method_getImplementation(
+                        method
+                    );
 
-                gOrigSceneVCViewDidAppear =
-                    current;
+                if (current !=
+                    (IMP)VMLSceneVCViewDidAppear) {
 
-                method_setImplementation(
-                    method,
-                    (IMP)VMLSceneVCViewDidAppear
-                );
+                    gOrigSceneVCViewDidAppear =
+                        current;
 
-                gInstalledSceneVCHook =
-                    YES;
+                    method_setImplementation(
+                        method,
+                        (IMP)VMLSceneVCViewDidAppear
+                    );
 
+                    gInstalledSceneVCHook =
+                        YES;
+
+                    VMLLog(
+                        @"HOOKED SBDeviceApplicationSceneViewController viewDidAppear:"
+                    );
+                }
+            } else {
                 VMLLog(
-                    @"HOOKED SBDeviceApplicationSceneViewController viewDidAppear:"
+                    @"SBDeviceApplicationSceneViewController viewDidAppear: missing"
                 );
             }
         }
-    } else if (!sceneVCClass) {
+    } else {
         VMLLog(
-            @"SBDeviceApplicationSceneViewController class not loaded yet"
+            @"SBDeviceApplicationSceneViewController class not loaded"
         );
     }
 }
 
-#pragma mark - Generic UIView fallback
+#pragma mark - Generic fallback
 
 %hook UIView
 
@@ -632,17 +918,26 @@ static void VMLInstallPrivateHooks(void) {
                 @"ApplicationScene"] ||
         [className
             containsString:
-                @"RootScene"] ||
-        [className
-            containsString:
                 @"PresentationView"];
 
     if (!interesting)
         return;
 
+    /*
+     _UIScenePresentationView đã có runtime hook riêng,
+     tránh log hai lần.
+    */
+
+    if ([className
+            isEqualToString:
+                @"_UIScenePresentationView"]) {
+
+        return;
+    }
+
     VMLInspectPresentationView(
         self,
-        @"genericUIView"
+        @"generic.didMoveToWindow"
     );
 }
 
@@ -754,7 +1049,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"VML PRIVATE PRESENTATION FINDER V9"
+            @"VML PRESENTATION SCREEN MAPPER V9.1"
         );
 
         VMLLog(
@@ -809,7 +1104,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"V9 ACTIVE"
+            @"V9.1 ACTIVE"
         );
     }
 }
