@@ -1,1 +1,10 @@
-{ Filter = { Bundles = ( "vn.vietmap.live", "com.apple.springboard" ); }; }
+{
+    Filter = {
+        Bundles = (
+            "vn.vietmap.live",
+            "com.apple.springboard",
+            "com.apple.CarPlayApp"
+        );
+        Mode = "Any";
+    };
+}
