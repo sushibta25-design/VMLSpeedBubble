@@ -9,18 +9,21 @@
 static UIWindow *gPhoneWindow = nil;
 
 static __weak UIWindow *gVMLCarPlayWindow = nil;
-static __weak UIView *gVMLCarPlayHost = nil;
-
-static UIView *gVMLCarPlayBubble = nil;
-
-static BOOL gVMLAddingOwnView = NO;
-static BOOL gVMLInspectScheduled = NO;
-
-static const NSInteger kVMLBubbleTag = 990099;
-static const NSInteger kVMLLabelTag  = 990100;
+static __weak UIView *gVMLKnownHost = nil;
 
 static NSInteger gVMLCurrentSpeed = 0;
 static int gVMLSpeedNotifyToken = 0;
+
+static BOOL gVMLAddingOwnView = NO;
+static BOOL gVMLDiagnosticInstalled = NO;
+static BOOL gVMLInspectScheduled = NO;
+
+static const NSInteger kVMLPhoneBubbleTag = 990099;
+static const NSInteger kVMLLabelTag = 990100;
+
+static const NSInteger kVMLMarker71Tag = 997101;
+static const NSInteger kVMLMarker72Tag = 997102;
+static const NSInteger kVMLMarker73Tag = 997103;
 
 #pragma mark - Logging
 
@@ -35,10 +38,10 @@ static void VMLLog(NSString *format, ...) {
 
     va_end(args);
 
+    NSLog(@"[VMLV8] %@", msg);
+
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
-
-    NSLog(@"[VMLV6.1] %@", msg);
 
     FILE *f =
         fopen(
@@ -129,9 +132,9 @@ static NSString *VMLSpeedText(void) {
     return @"--";
 }
 
-#pragma mark - Bubble
+#pragma mark - Bubble creator
 
-static UIView *VMLMakeBubble(
+static UIView *VMLMakeCircle(
     NSString *text,
     CGFloat size
 ) {
@@ -157,14 +160,10 @@ static UIView *VMLMakeBubble(
     bubble.layer.borderColor =
         UIColor.systemRedColor.CGColor;
 
-    bubble.clipsToBounds =
-        YES;
+    bubble.clipsToBounds = YES;
 
     bubble.userInteractionEnabled =
         NO;
-
-    bubble.tag =
-        kVMLBubbleTag;
 
     UILabel *label =
         [[UILabel alloc]
@@ -189,7 +188,7 @@ static UIView *VMLMakeBubble(
 
     label.font =
         [UIFont systemFontOfSize:
-            size * 0.40
+            size * 0.38
                          weight:
             UIFontWeightBold];
 
@@ -197,17 +196,24 @@ static UIView *VMLMakeBubble(
         YES;
 
     label.minimumScaleFactor =
-        0.5;
+        0.45;
 
-    [bubble addSubview:
-        label];
+    [bubble addSubview:label];
 
     return bubble;
 }
 
-static void VMLUpdateBubble(
-    UIView *bubble
-) {
+#pragma mark - Phone speed bubble
+
+static void VMLUpdatePhoneBubble(void) {
+    if (!gPhoneWindow)
+        return;
+
+    UIView *bubble =
+        [gPhoneWindow
+            viewWithTag:
+                kVMLPhoneBubbleTag];
+
     if (!bubble)
         return;
 
@@ -220,47 +226,6 @@ static void VMLUpdateBubble(
         label.text =
             VMLSpeedText();
     }
-
-    bubble.layer.zPosition =
-        CGFLOAT_MAX;
-
-    if (bubble.superview) {
-        [bubble.superview
-            bringSubviewToFront:
-                bubble];
-    }
-}
-
-static void VMLUpdateAllBubbles(void) {
-    dispatch_async(
-        dispatch_get_main_queue(),
-        ^{
-            if (gVMLCarPlayBubble) {
-                VMLUpdateBubble(
-                    gVMLCarPlayBubble
-                );
-            }
-
-            if (gPhoneWindow) {
-                UIView *phoneBubble =
-                    [gPhoneWindow
-                        viewWithTag:
-                            kVMLBubbleTag];
-
-                if (phoneBubble) {
-                    VMLUpdateBubble(
-                        phoneBubble
-                    );
-                }
-            }
-
-            VMLLog(
-                @"BUBBLES UPDATED speed=%ld text=%@",
-                (long)gVMLCurrentSpeed,
-                VMLSpeedText()
-            );
-        }
-    );
 }
 
 #pragma mark - IPC
@@ -303,7 +268,12 @@ static void VMLReadPublishedSpeed(void) {
         (long)gVMLCurrentSpeed
     );
 
-    VMLUpdateAllBubbles();
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            VMLUpdatePhoneBubble();
+        }
+    );
 }
 
 static void VMLStartSpeedReceiver(void) {
@@ -349,7 +319,7 @@ static void VMLStartSpeedReceiver(void) {
     VMLReadPublishedSpeed();
 }
 
-#pragma mark - Known host
+#pragma mark - Known host detection
 
 static BOOL VMLLooksLikeKnownHost(
     UIView *view
@@ -401,16 +371,11 @@ static BOOL VMLLooksLikeKnownHost(
         return NO;
     }
 
-    UIWindow *window =
-        view.window;
-
-    if (!VMLIsCarPlayRootWindow(window))
-        return NO;
-
-    return YES;
+    return
+        VMLIsCarPlayRootWindow(
+            view.window
+        );
 }
-
-#pragma mark - Host search
 
 static UIView *VMLFindKnownHostRecursive(
     UIView *view
@@ -437,151 +402,147 @@ static UIView *VMLFindKnownHostRecursive(
     return nil;
 }
 
-static UIView *VMLFindFallbackHostRecursive(
+#pragma mark - Layer diagnostics
+
+static NSString *VMLMaskDescription(
+    CALayer *layer
+) {
+    if (!layer)
+        return @"nil";
+
+    CALayer *mask =
+        layer.mask;
+
+    if (!mask)
+        return @"nil";
+
+    return
+        [NSString stringWithFormat:
+            @"%@ frame=%@ bounds=%@ hidden=%d opacity=%.2f",
+            NSStringFromClass(mask.class),
+            NSStringFromCGRect(mask.frame),
+            NSStringFromCGRect(mask.bounds),
+            mask.hidden,
+            mask.opacity];
+}
+
+static void VMLLogViewState(
+    NSString *name,
     UIView *view
 ) {
-    if (!view)
-        return nil;
-
-    NSString *className =
-        NSStringFromClass(
-            view.class
-        );
-
-    if ([className
-            isEqualToString:
-                @"_UIVisualEffectContentView"]) {
-
-        UIWindow *window =
-            view.window;
-
-        CGSize size =
-            view.bounds.size;
-
-        if (VMLIsCarPlayRootWindow(window) &&
-            size.width > 400.0 &&
-            size.height > 180.0) {
-
-            return view;
-        }
-    }
-
-    for (UIView *child
-         in view.subviews) {
-
-        UIView *found =
-            VMLFindFallbackHostRecursive(
-                child
-            );
-
-        if (found)
-            return found;
-    }
-
-    return nil;
-}
-
-#pragma mark - Tree dump
-
-static void VMLDumpInterestingTree(
-    UIView *view,
-    NSInteger depth
-) {
-    if (!view)
-        return;
-
-    if (depth > 12)
-        return;
-
-    NSString *className =
-        NSStringFromClass(
-            view.class
-        );
-
-    BOOL interesting =
-        depth <= 3 ||
-        [className
-            containsString:
-                @"VisualEffect"] ||
-        [className
-            containsString:
-                @"Presentation"] ||
-        [className
-            containsString:
-                @"Scene"] ||
-        [className
-            containsString:
-                @"Application"];
-
-    if (interesting) {
+    if (!view) {
         VMLLog(
-            @"TREE depth=%ld class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.2f super=%@ subviews=%lu",
-            (long)depth,
-            className,
-            NSStringFromCGRect(
-                view.frame
-            ),
-            NSStringFromCGRect(
-                view.bounds
-            ),
-            view.hidden,
-            view.alpha,
-            view.superview
-                ? NSStringFromClass(
-                    view.superview.class
-                )
-                : @"nil",
-            (unsigned long)
-                view.subviews.count
+            @"STATE %@ = nil",
+            name
         );
+        return;
     }
 
-    for (UIView *child
-         in view.subviews) {
+    CALayer *layer =
+        view.layer;
 
-        VMLDumpInterestingTree(
-            child,
-            depth + 1
+    VMLLog(
+        @"STATE %@ class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f opaque=%d clips=%d userInteraction=%d window=%@",
+        name,
+        NSStringFromClass(view.class),
+        NSStringFromCGRect(view.frame),
+        NSStringFromCGRect(view.bounds),
+        view.hidden,
+        view.alpha,
+        view.opaque,
+        view.clipsToBounds,
+        view.userInteractionEnabled,
+        view.window
+            ? NSStringFromClass(
+                view.window.class
+            )
+            : @"nil"
+    );
+
+    VMLLog(
+        @"LAYER %@ class=%@ frame=%@ bounds=%@ hidden=%d opacity=%.3f z=%.3f masksToBounds=%d mask=%@ sublayers=%lu",
+        name,
+        NSStringFromClass(layer.class),
+        NSStringFromCGRect(layer.frame),
+        NSStringFromCGRect(layer.bounds),
+        layer.hidden,
+        layer.opacity,
+        layer.zPosition,
+        layer.masksToBounds,
+        VMLMaskDescription(layer),
+        (unsigned long)
+            layer.sublayers.count
+    );
+}
+
+static void VMLLogSuperviewChain(
+    UIView *view
+) {
+    UIView *current =
+        view;
+
+    NSInteger depth =
+        0;
+
+    while (current &&
+           depth < 15) {
+
+        VMLLog(
+            @"CHAIN depth=%ld class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f window=%@",
+            (long)depth,
+            NSStringFromClass(
+                current.class
+            ),
+            NSStringFromCGRect(
+                current.frame
+            ),
+            NSStringFromCGRect(
+                current.bounds
+            ),
+            current.hidden,
+            current.alpha,
+            current.window
+                ? NSStringFromClass(
+                    current.window.class
+                )
+                : @"nil"
         );
+
+        current =
+            current.superview;
+
+        depth++;
     }
 }
 
-#pragma mark - Attach CarPlay bubble
+#pragma mark - Marker
 
-static void VMLAttachToHost(
-    UIView *host,
-    NSString *reason
+static void VMLAddMarker(
+    UIView *target,
+    NSInteger tag,
+    NSString *text,
+    CGRect frame,
+    NSString *name
 ) {
-    if (!host)
-        return;
-
-    UIWindow *window =
-        host.window;
-
-    if (!VMLIsCarPlayRootWindow(window))
+    if (!target)
         return;
 
     UIView *existing =
-        [host viewWithTag:
-            kVMLBubbleTag];
+        [target
+            viewWithTag:
+                tag];
 
     if (existing) {
-        gVMLCarPlayHost =
-            host;
+        existing.layer.zPosition =
+            CGFLOAT_MAX;
 
-        gVMLCarPlayBubble =
-            existing;
-
-        VMLUpdateBubble(
-            existing
-        );
+        [target
+            bringSubviewToFront:
+                existing];
 
         VMLLog(
-            @"HOST BUBBLE EXISTS reason=%@ host=%@ frame=%@",
-            reason,
-            NSStringFromClass(
-                host.class
-            ),
+            @"MARKER %@ already exists frame=%@",
+            name,
             NSStringFromCGRect(
                 existing.frame
             )
@@ -590,131 +551,169 @@ static void VMLAttachToHost(
         return;
     }
 
-    if (gVMLCarPlayBubble &&
-        gVMLCarPlayBubble.superview &&
-        gVMLCarPlayBubble.superview != host) {
-
-        [gVMLCarPlayBubble
-            removeFromSuperview];
-
-        gVMLCarPlayBubble =
-            nil;
-    }
-
     gVMLAddingOwnView =
         YES;
 
-    CGFloat size =
-        46.0;
-
-    UIView *bubble =
-        VMLMakeBubble(
-            VMLSpeedText(),
-            size
+    UIView *marker =
+        VMLMakeCircle(
+            text,
+            frame.size.width
         );
 
-    CGFloat x =
-        62.0;
+    marker.tag =
+        tag;
 
-    CGFloat y =
-        122.0;
+    marker.frame =
+        frame;
 
-    CGFloat maxX =
-        host.bounds.size.width -
-        size -
-        4.0;
+    marker.hidden =
+        NO;
 
-    CGFloat maxY =
-        host.bounds.size.height -
-        size -
-        4.0;
+    marker.alpha =
+        1.0;
 
-    if (maxX < 4.0)
-        maxX = 4.0;
+    marker.layer.hidden =
+        NO;
 
-    if (maxY < 4.0)
-        maxY = 4.0;
+    marker.layer.opacity =
+        1.0;
 
-    x =
-        MAX(
-            4.0,
-            MIN(
-                x,
-                maxX
-            )
-        );
-
-    y =
-        MAX(
-            4.0,
-            MIN(
-                y,
-                maxY
-            )
-        );
-
-    bubble.frame =
-        CGRectMake(
-            x,
-            y,
-            size,
-            size
-        );
-
-    bubble.layer.zPosition =
+    marker.layer.zPosition =
         CGFLOAT_MAX;
 
-    [host addSubview:
-        bubble];
+    [target addSubview:
+        marker];
 
-    [host bringSubviewToFront:
-        bubble];
-
-    gVMLCarPlayHost =
-        host;
-
-    gVMLCarPlayBubble =
-        bubble;
+    [target bringSubviewToFront:
+        marker];
 
     gVMLAddingOwnView =
         NO;
 
+    VMLLog(
+        @"*** MARKER %@ ADDED target=%@ targetFrame=%@ markerFrame=%@ targetHidden=%d targetAlpha=%.2f targetLayerHidden=%d targetLayerOpacity=%.2f ***",
+        name,
+        NSStringFromClass(
+            target.class
+        ),
+        NSStringFromCGRect(
+            target.frame
+        ),
+        NSStringFromCGRect(
+            marker.frame
+        ),
+        target.hidden,
+        target.alpha,
+        target.layer.hidden,
+        target.layer.opacity
+    );
+}
+
+#pragma mark - Install three markers
+
+static void VMLInstallDiagnosticMarkers(
+    UIView *host
+) {
+    if (!host)
+        return;
+
     UIView *parent =
         host.superview;
 
+    UIWindow *root =
+        host.window;
+
+    if (!VMLIsCarPlayRootWindow(root))
+        return;
+
+    gVMLKnownHost =
+        host;
+
     VMLLog(
-        @"*** PRESENTATION HOST BUBBLE ADDED reason=%@ host=%@ hostFrame=%@ hostBounds=%@ parent=%@ parentFrame=%@ windowBounds=%@ speed=%ld text=%@ ***",
-        reason,
-        NSStringFromClass(
-            host.class
-        ),
-        NSStringFromCGRect(
-            host.frame
-        ),
-        NSStringFromCGRect(
-            host.bounds
-        ),
+        @"================================================"
+    );
+
+    VMLLog(
+        @"*** V8 DIAGNOSTIC HOST FOUND ***"
+    );
+
+    VMLLogViewState(
+        @"HOST",
+        host
+    );
+
+    VMLLogViewState(
+        @"PARENT",
         parent
-            ? NSStringFromClass(
-                parent.class
-            )
-            : @"nil",
-        parent
-            ? NSStringFromCGRect(
-                parent.frame
-            )
-            : @"nil",
-        NSStringFromCGRect(
-            window.bounds
+    );
+
+    VMLLogViewState(
+        @"ROOT",
+        root
+    );
+
+    VMLLogSuperviewChain(
+        host
+    );
+
+    /*
+     71 = host
+     72 = parent
+     73 = root
+    */
+
+    VMLAddMarker(
+        host,
+        kVMLMarker71Tag,
+        @"71",
+        CGRectMake(
+            62,
+            122,
+            46,
+            46
         ),
-        (long)gVMLCurrentSpeed,
-        VMLSpeedText()
+        @"71-HOST"
+    );
+
+    if (parent) {
+        VMLAddMarker(
+            parent,
+            kVMLMarker72Tag,
+            @"72",
+            CGRectMake(
+                120,
+                122,
+                46,
+                46
+            ),
+            @"72-PARENT"
+        );
+    }
+
+    VMLAddMarker(
+        root,
+        kVMLMarker73Tag,
+        @"73",
+        CGRectMake(
+            178,
+            122,
+            46,
+            46
+        ),
+        @"73-ROOT"
+    );
+
+    gVMLDiagnosticInstalled =
+        YES;
+
+    VMLLog(
+        @"*** V8 THREE MARKERS INSTALLED ***"
     );
 }
 
 #pragma mark - Inspect root
 
-static void VMLInspectCarPlayRoot(
+static void VMLInspectRoot(
     UIWindow *window,
     NSString *reason
 ) {
@@ -725,7 +724,7 @@ static void VMLInspectCarPlayRoot(
         window;
 
     VMLLog(
-        @"*** INSPECT CARPLAY ROOT reason=%@ frame=%@ bounds=%@ subviews=%lu ***",
+        @"*** INSPECT ROOT reason=%@ frame=%@ bounds=%@ hidden=%d alpha=%.2f subviews=%lu ***",
         reason,
         NSStringFromCGRect(
             window.frame
@@ -733,85 +732,49 @@ static void VMLInspectCarPlayRoot(
         NSStringFromCGRect(
             window.bounds
         ),
+        window.hidden,
+        window.alpha,
         (unsigned long)
             window.subviews.count
     );
 
-    UIView *knownHost =
+    UIView *host =
         VMLFindKnownHostRecursive(
             window
         );
 
-    if (knownHost) {
+    if (!host) {
         VMLLog(
-            @"*** KNOWN HOST FOUND class=%@ frame=%@ bounds=%@ parent=%@ ***",
-            NSStringFromClass(
-                knownHost.class
-            ),
-            NSStringFromCGRect(
-                knownHost.frame
-            ),
-            NSStringFromCGRect(
-                knownHost.bounds
-            ),
-            knownHost.superview
-                ? NSStringFromClass(
-                    knownHost.superview.class
-                )
-                : @"nil"
-        );
-
-        VMLAttachToHost(
-            knownHost,
-            @"knownHost"
-        );
-
-        return;
-    }
-
-    UIView *fallbackHost =
-        VMLFindFallbackHostRecursive(
-            window
-        );
-
-    if (fallbackHost) {
-        VMLLog(
-            @"*** FALLBACK HOST FOUND class=%@ frame=%@ bounds=%@ parent=%@ ***",
-            NSStringFromClass(
-                fallbackHost.class
-            ),
-            NSStringFromCGRect(
-                fallbackHost.frame
-            ),
-            NSStringFromCGRect(
-                fallbackHost.bounds
-            ),
-            fallbackHost.superview
-                ? NSStringFromClass(
-                    fallbackHost.superview.class
-                )
-                : @"nil"
-        );
-
-        VMLAttachToHost(
-            fallbackHost,
-            @"fallbackHost"
+            @"*** V8 KNOWN HOST NOT FOUND ***"
         );
 
         return;
     }
 
     VMLLog(
-        @"*** NO PRESENTATION HOST FOUND ***"
+        @"*** V8 KNOWN HOST FOUND class=%@ frame=%@ bounds=%@ parent=%@ ***",
+        NSStringFromClass(
+            host.class
+        ),
+        NSStringFromCGRect(
+            host.frame
+        ),
+        NSStringFromCGRect(
+            host.bounds
+        ),
+        host.superview
+            ? NSStringFromClass(
+                host.superview.class
+            )
+            : @"nil"
     );
 
-    VMLDumpInterestingTree(
-        window,
-        0
+    VMLInstallDiagnosticMarkers(
+        host
     );
 }
 
-#pragma mark - Capture root
+#pragma mark - Capture CarPlay root
 
 static void VMLCaptureRoot(
     UIWindow *window,
@@ -826,11 +789,19 @@ static void VMLCaptureRoot(
     BOOL changed =
         gVMLCarPlayWindow != window;
 
+    if (changed) {
+        gVMLDiagnosticInstalled =
+            NO;
+
+        gVMLKnownHost =
+            nil;
+    }
+
     gVMLCarPlayWindow =
         window;
 
     VMLLog(
-        @"*** CARPLAY ROOT CAPTURED reason=%@ class=%@ frame=%@ bounds=%@ hidden=%d level=%f changed=%d ***",
+        @"*** CARPLAY ROOT CAPTURED reason=%@ class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.2f level=%f changed=%d ***",
         reason,
         NSStringFromClass(
             window.class
@@ -842,6 +813,7 @@ static void VMLCaptureRoot(
             window.bounds
         ),
         window.hidden,
+        window.alpha,
         window.windowLevel,
         changed
     );
@@ -868,9 +840,9 @@ static void VMLCaptureRoot(
             if (!w)
                 return;
 
-            VMLInspectCarPlayRoot(
+            VMLInspectRoot(
                 w,
-                @"didMoveToWindow+100ms"
+                @"capture+100ms"
             );
         }
     );
@@ -888,15 +860,35 @@ static void VMLCaptureRoot(
             if (!w)
                 return;
 
-            VMLInspectCarPlayRoot(
+            VMLInspectRoot(
                 w,
-                @"didMoveToWindow+1s"
+                @"capture+1s"
+            );
+        }
+    );
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            3 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            UIWindow *w =
+                gVMLCarPlayWindow;
+
+            if (!w)
+                return;
+
+            VMLInspectRoot(
+                w,
+                @"capture+3s"
             );
         }
     );
 }
 
-#pragma mark - UIView hook
+#pragma mark - UIView trigger
 
 %hook UIView
 
@@ -923,26 +915,46 @@ static void VMLCaptureRoot(
             self.class
         );
 
-    VMLLog(
-        @"*** DID MOVE TO CARPLAY WINDOW view=%@ frame=%@ bounds=%@ super=%@ ***",
-        className,
-        NSStringFromCGRect(
-            self.frame
-        ),
-        NSStringFromCGRect(
-            self.bounds
-        ),
-        self.superview
-            ? NSStringFromClass(
-                self.superview.class
-            )
-            : @"nil"
-    );
+    /*
+     Không spam mọi view.
+     Chỉ log view lớn hoặc view đáng chú ý.
+    */
+
+    BOOL interesting =
+        self.bounds.size.width > 400.0 ||
+        [className
+            containsString:
+                @"VisualEffect"] ||
+        [className
+            containsString:
+                @"Presentation"] ||
+        [className
+            containsString:
+                @"Scene"];
+
+    if (interesting) {
+        VMLLog(
+            @"DIDMOVE view=%@ frame=%@ bounds=%@ super=%@ windowHidden=%d",
+            className,
+            NSStringFromCGRect(
+                self.frame
+            ),
+            NSStringFromCGRect(
+                self.bounds
+            ),
+            self.superview
+                ? NSStringFromClass(
+                    self.superview.class
+                )
+                : @"nil",
+            window.hidden
+        );
+    }
 
     VMLCaptureRoot(
         window,
         [NSString stringWithFormat:
-            @"didMoveToWindow:%@",
+            @"didMove:%@",
             className]
     );
 }
@@ -1024,10 +1036,13 @@ static void VMLCreatePhoneBubble(void) {
         vc;
 
     UIView *bubble =
-        VMLMakeBubble(
+        VMLMakeCircle(
             VMLSpeedText(),
             size
         );
+
+    bubble.tag =
+        kVMLPhoneBubbleTag;
 
     [vc.view addSubview:
         bubble];
@@ -1058,7 +1073,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"VML DIDMOVETOWINDOW FINDER V6.1"
+            @"VML CARPLAY 3-LAYER DIAGNOSTIC V8"
         );
 
         VMLLog(
@@ -1088,7 +1103,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"DIDMOVETOWINDOW FINDER ACTIVE"
+            @"V8 ACTIVE"
         );
     }
 }
