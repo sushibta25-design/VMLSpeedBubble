@@ -9,16 +9,18 @@
 static UIWindow *gPhoneWindow = nil;
 
 static __weak UIWindow *gCarPlayRoot = nil;
+static __weak UIView *gCarPlayHost = nil;
+
+static UIView *gCarPlayBubble = nil;
 
 static NSInteger gCurrentSpeed = 0;
 static int gSpeedNotifyToken = 0;
 
-static BOOL gDumpScheduled = NO;
-
-static NSUInteger gRootCaptureCount = 0;
-static NSUInteger gTreeDumpCount = 0;
+static BOOL gAddingOwnView = NO;
+static BOOL gScannerRunning = NO;
 
 static const NSInteger kPhoneBubbleTag = 990099;
+static const NSInteger kCarPlayBubbleTag = 990199;
 static const NSInteger kLabelTag = 990100;
 
 #pragma mark - Logging
@@ -34,7 +36,7 @@ static void VMLLog(NSString *format, ...) {
 
     va_end(args);
 
-    NSLog(@"[VMLV9.3FIX] %@", msg);
+    NSLog(@"[VMLV10] %@", msg);
 
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
@@ -56,7 +58,7 @@ static void VMLLog(NSString *format, ...) {
     }
 }
 
-#pragma mark - SpringBoard
+#pragma mark - Environment
 
 static BOOL VMLIsSpringBoard(void) {
     NSString *bundle =
@@ -66,8 +68,6 @@ static BOOL VMLIsSpringBoard(void) {
         [bundle isEqualToString:
             @"com.apple.springboard"];
 }
-
-#pragma mark - Geometry
 
 static BOOL VMLNear(
     CGFloat a,
@@ -81,28 +81,12 @@ static BOOL VMLLooksLikeCarPlaySize(
     CGSize size
 ) {
     BOOL landscape =
-        VMLNear(
-            size.width,
-            640.0,
-            45.0
-        ) &&
-        VMLNear(
-            size.height,
-            240.0,
-            45.0
-        );
+        VMLNear(size.width, 640.0, 45.0) &&
+        VMLNear(size.height, 240.0, 45.0);
 
     BOOL rotated =
-        VMLNear(
-            size.width,
-            240.0,
-            45.0
-        ) &&
-        VMLNear(
-            size.height,
-            640.0,
-            45.0
-        );
+        VMLNear(size.width, 240.0, 45.0) &&
+        VMLNear(size.height, 640.0, 45.0);
 
     return landscape || rotated;
 }
@@ -114,9 +98,7 @@ static BOOL VMLIsCarPlayRootWindow(
         return NO;
 
     NSString *className =
-        NSStringFromClass(
-            window.class
-        );
+        NSStringFromClass(window.class);
 
     if (![className
             isEqualToString:
@@ -125,19 +107,13 @@ static BOOL VMLIsCarPlayRootWindow(
         return NO;
     }
 
-    BOOL boundsMatch =
+    return
         VMLLooksLikeCarPlaySize(
             window.bounds.size
-        );
-
-    BOOL frameMatch =
+        ) ||
         VMLLooksLikeCarPlaySize(
             window.frame.size
         );
-
-    return
-        boundsMatch ||
-        frameMatch;
 }
 
 #pragma mark - Speed
@@ -155,9 +131,10 @@ static NSString *VMLSpeedText(void) {
     return @"--";
 }
 
-#pragma mark - Phone bubble
+#pragma mark - Bubble creator
 
-static UIView *VMLMakePhoneBubble(
+static UIView *VMLMakeBubble(
+    NSInteger tag,
     CGFloat size
 ) {
     UIView *bubble =
@@ -171,7 +148,7 @@ static UIView *VMLMakePhoneBubble(
                 )];
 
     bubble.tag =
-        kPhoneBubbleTag;
+        tag;
 
     bubble.backgroundColor =
         UIColor.whiteColor;
@@ -230,15 +207,9 @@ static UIView *VMLMakePhoneBubble(
     return bubble;
 }
 
-static void VMLUpdatePhoneBubble(void) {
-    if (!gPhoneWindow)
-        return;
-
-    UIView *bubble =
-        [gPhoneWindow
-            viewWithTag:
-                kPhoneBubbleTag];
-
+static void VMLUpdateBubble(
+    UIView *bubble
+) {
     if (!bubble)
         return;
 
@@ -252,6 +223,47 @@ static void VMLUpdatePhoneBubble(void) {
         label.text =
             VMLSpeedText();
     }
+
+    bubble.layer.zPosition =
+        CGFLOAT_MAX;
+
+    if (bubble.superview) {
+        [bubble.superview
+            bringSubviewToFront:
+                bubble];
+    }
+}
+
+static void VMLUpdateAllBubbles(void) {
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            if (gPhoneWindow) {
+                UIView *phoneBubble =
+                    [gPhoneWindow
+                        viewWithTag:
+                            kPhoneBubbleTag];
+
+                if (phoneBubble) {
+                    VMLUpdateBubble(
+                        phoneBubble
+                    );
+                }
+            }
+
+            if (gCarPlayBubble) {
+                VMLUpdateBubble(
+                    gCarPlayBubble
+                );
+            }
+
+            VMLLog(
+                @"BUBBLES UPDATED speed=%ld text=%@",
+                (long)gCurrentSpeed,
+                VMLSpeedText()
+            );
+        }
+    );
 }
 
 #pragma mark - IPC
@@ -294,12 +306,7 @@ static void VMLReadSpeed(void) {
         (long)gCurrentSpeed
     );
 
-    dispatch_async(
-        dispatch_get_main_queue(),
-        ^{
-            VMLUpdatePhoneBubble();
-        }
-    );
+    VMLUpdateAllBubbles();
 }
 
 static void VMLStartSpeedReceiver(void) {
@@ -345,187 +352,366 @@ static void VMLStartSpeedReceiver(void) {
     VMLReadSpeed();
 }
 
-#pragma mark - Interesting classes
+#pragma mark - Host detection
 
-static BOOL VMLInterestingClassName(
-    NSString *className
-) {
-    if (!className)
-        return NO;
-
-    NSArray<NSString *> *tokens =
-        @[
-            @"Scene",
-            @"Presentation",
-            @"Application",
-            @"Host",
-            @"VisualEffect",
-            @"Root",
-            @"CarPlay",
-            @"Dashboard",
-            @"Icon",
-            @"Dock"
-        ];
-
-    for (NSString *token
-         in tokens) {
-
-        if ([className
-                containsString:
-                    token]) {
-
-            return YES;
-        }
-    }
-
-    return NO;
-}
-
-#pragma mark - Responder chain
-
-static void VMLLogResponderChain(
-    UIResponder *responder,
-    NSString *prefix
-) {
-    if (!responder)
-        return;
-
-    UIResponder *current =
-        responder;
-
-    NSInteger depth =
-        0;
-
-    while (current &&
-           depth < 20) {
-
-        VMLLog(
-            @"%@ RESPONDER depth=%ld class=%@",
-            prefix,
-            (long)depth,
-            NSStringFromClass(
-                current.class
-            )
-        );
-
-        current =
-            current.nextResponder;
-
-        depth++;
-    }
-}
-
-#pragma mark - Tree mapper
-
-static void VMLDumpTreeRecursive(
-    UIView *view,
-    NSInteger depth
+static BOOL VMLLooksLikeKnownHost(
+    UIView *view
 ) {
     if (!view)
-        return;
-
-    if (depth > 25)
-        return;
+        return NO;
 
     NSString *className =
         NSStringFromClass(
             view.class
         );
 
-    BOOL interesting =
-        VMLInterestingClassName(
-            className
-        );
+    if (![className
+            isEqualToString:
+                @"_UIVisualEffectContentView"]) {
 
-    if (depth <= 4 ||
-        interesting) {
-
-        VMLLog(
-            @"TREE depth=%ld class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f clips=%d super=%@ window=%@ subviews=%lu",
-            (long)depth,
-            className,
-            NSStringFromCGRect(
-                view.frame
-            ),
-            NSStringFromCGRect(
-                view.bounds
-            ),
-            view.hidden,
-            view.alpha,
-            view.clipsToBounds,
-            view.superview
-                ? NSStringFromClass(
-                    view.superview.class
-                )
-                : @"nil",
-            view.window
-                ? NSStringFromClass(
-                    view.window.class
-                )
-                : @"nil",
-            (unsigned long)
-                view.subviews.count
-        );
+        return NO;
     }
 
-    if (interesting) {
-        VMLLog(
-            @"*** INTERESTING CARPLAY VIEW class=%@ depth=%ld ***",
-            className,
-            (long)depth
+    CGSize size =
+        view.bounds.size;
+
+    BOOL sizeMatch =
+        VMLNear(
+            size.width,
+            595.0,
+            45.0
+        ) &&
+        VMLNear(
+            size.height,
+            240.0,
+            35.0
         );
 
-        NSString *prefix =
-            [NSString stringWithFormat:
-                @"CPVIEW:%@",
-                className];
+    if (!sizeMatch)
+        return NO;
 
-        VMLLogResponderChain(
-            view,
-            prefix
+    UIView *parent =
+        view.superview;
+
+    if (!parent)
+        return NO;
+
+    NSString *parentClass =
+        NSStringFromClass(
+            parent.class
         );
+
+    if (![parentClass
+            isEqualToString:
+                @"UIVisualEffectView"]) {
+
+        return NO;
     }
 
-    NSArray<UIView *> *children =
-        [view.subviews copy];
+    UIWindow *window =
+        view.window;
 
-    for (UIView *child
-         in children) {
+    if (!VMLIsCarPlayRootWindow(window))
+        return NO;
 
-        VMLDumpTreeRecursive(
-            child,
-            depth + 1
-        );
-    }
+    return YES;
 }
 
-#pragma mark - Root dump
+static UIView *VMLFindKnownHostRecursive(
+    UIView *view
+) {
+    if (!view)
+        return nil;
 
-static void VMLDumpCarPlayRoot(
+    if (VMLLooksLikeKnownHost(view)) {
+        return view;
+    }
+
+    for (UIView *child
+         in view.subviews) {
+
+        UIView *found =
+            VMLFindKnownHostRecursive(
+                child
+            );
+
+        if (found)
+            return found;
+    }
+
+    return nil;
+}
+
+static UIView *VMLFindFallbackHostRecursive(
+    UIView *view
+) {
+    if (!view)
+        return nil;
+
+    NSString *className =
+        NSStringFromClass(
+            view.class
+        );
+
+    if ([className
+            isEqualToString:
+                @"_UIVisualEffectContentView"]) {
+
+        UIWindow *window =
+            view.window;
+
+        CGSize size =
+            view.bounds.size;
+
+        if (VMLIsCarPlayRootWindow(window) &&
+            size.width > 400.0 &&
+            size.height > 180.0) {
+
+            return view;
+        }
+    }
+
+    for (UIView *child
+         in view.subviews) {
+
+        UIView *found =
+            VMLFindFallbackHostRecursive(
+                child
+            );
+
+        if (found)
+            return found;
+    }
+
+    return nil;
+}
+
+#pragma mark - Attach CarPlay bubble
+
+static void VMLAttachCarPlayBubble(
+    UIView *host,
+    NSString *reason
+) {
+    if (!host)
+        return;
+
+    UIWindow *window =
+        host.window;
+
+    if (!VMLIsCarPlayRootWindow(window))
+        return;
+
+    UIView *existing =
+        [host
+            viewWithTag:
+                kCarPlayBubbleTag];
+
+    if (existing) {
+        gCarPlayHost =
+            host;
+
+        gCarPlayBubble =
+            existing;
+
+        VMLUpdateBubble(
+            existing
+        );
+
+        return;
+    }
+
+    if (gCarPlayBubble &&
+        gCarPlayBubble.superview &&
+        gCarPlayBubble.superview != host) {
+
+        [gCarPlayBubble
+            removeFromSuperview];
+
+        gCarPlayBubble =
+            nil;
+    }
+
+    gAddingOwnView =
+        YES;
+
+    CGFloat size =
+        46.0;
+
+    UIView *bubble =
+        VMLMakeBubble(
+            kCarPlayBubbleTag,
+            size
+        );
+
+    CGFloat x =
+        62.0;
+
+    CGFloat y =
+        122.0;
+
+    CGFloat maxX =
+        host.bounds.size.width -
+        size -
+        4.0;
+
+    CGFloat maxY =
+        host.bounds.size.height -
+        size -
+        4.0;
+
+    if (maxX < 4.0)
+        maxX = 4.0;
+
+    if (maxY < 4.0)
+        maxY = 4.0;
+
+    x =
+        MAX(
+            4.0,
+            MIN(
+                x,
+                maxX
+            )
+        );
+
+    y =
+        MAX(
+            4.0,
+            MIN(
+                y,
+                maxY
+            )
+        );
+
+    bubble.frame =
+        CGRectMake(
+            x,
+            y,
+            size,
+            size
+        );
+
+    bubble.hidden =
+        NO;
+
+    bubble.alpha =
+        1.0;
+
+    bubble.layer.hidden =
+        NO;
+
+    bubble.layer.opacity =
+        1.0;
+
+    bubble.layer.zPosition =
+        CGFLOAT_MAX;
+
+    [host addSubview:
+        bubble];
+
+    [host bringSubviewToFront:
+        bubble];
+
+    gCarPlayHost =
+        host;
+
+    gCarPlayBubble =
+        bubble;
+
+    gAddingOwnView =
+        NO;
+
+    VMLLog(
+        @"*** CARPLAY BUBBLE ADDED reason=%@ host=%@ hostFrame=%@ root=%@ rootHidden=%d speed=%ld text=%@ ***",
+        reason,
+        NSStringFromClass(
+            host.class
+        ),
+        NSStringFromCGRect(
+            host.frame
+        ),
+        NSStringFromClass(
+            window.class
+        ),
+        window.hidden,
+        (long)gCurrentSpeed,
+        VMLSpeedText()
+    );
+}
+
+#pragma mark - Scan one root
+
+static void VMLProcessCarPlayRoot(
     UIWindow *root,
     NSString *reason
 ) {
     if (!VMLIsCarPlayRootWindow(root))
         return;
 
-    gTreeDumpCount++;
+    gCarPlayRoot =
+        root;
+
+    UIView *host =
+        VMLFindKnownHostRecursive(
+            root
+        );
+
+    if (host) {
+        VMLLog(
+            @"*** KNOWN HOST FOUND reason=%@ class=%@ frame=%@ bounds=%@ rootHidden=%d ***",
+            reason,
+            NSStringFromClass(
+                host.class
+            ),
+            NSStringFromCGRect(
+                host.frame
+            ),
+            NSStringFromCGRect(
+                host.bounds
+            ),
+            root.hidden
+        );
+
+        VMLAttachCarPlayBubble(
+            host,
+            @"knownHost"
+        );
+
+        return;
+    }
+
+    UIView *fallback =
+        VMLFindFallbackHostRecursive(
+            root
+        );
+
+    if (fallback) {
+        VMLLog(
+            @"*** FALLBACK HOST FOUND reason=%@ class=%@ frame=%@ bounds=%@ rootHidden=%d ***",
+            reason,
+            NSStringFromClass(
+                fallback.class
+            ),
+            NSStringFromCGRect(
+                fallback.frame
+            ),
+            NSStringFromCGRect(
+                fallback.bounds
+            ),
+            root.hidden
+        );
+
+        VMLAttachCarPlayBubble(
+            fallback,
+            @"fallbackHost"
+        );
+
+        return;
+    }
 
     VMLLog(
-        @"================================================"
-    );
-
-    VMLLog(
-        @"*** CARPLAY ROOT TREE DUMP #%lu reason=%@ ***",
-        (unsigned long)
-            gTreeDumpCount,
-        reason
-    );
-
-    VMLLog(
-        @"ROOT class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f level=%f subviews=%lu",
-        NSStringFromClass(
-            root.class
-        ),
+        @"CARPLAY ROOT FOUND BUT HOST NOT FOUND reason=%@ rootFrame=%@ rootBounds=%@ hidden=%d subviews=%lu",
+        reason,
         NSStringFromCGRect(
             root.frame
         ),
@@ -533,103 +719,77 @@ static void VMLDumpCarPlayRoot(
             root.bounds
         ),
         root.hidden,
-        root.alpha,
-        root.windowLevel,
         (unsigned long)
             root.subviews.count
     );
-
-    UIScreen *screen =
-        root.screen;
-
-    if (screen) {
-        VMLLog(
-            @"ROOT SCREEN bounds=%@ nativeBounds=%@ scale=%.3f nativeScale=%.3f",
-            NSStringFromCGRect(
-                screen.bounds
-            ),
-            NSStringFromCGRect(
-                screen.nativeBounds
-            ),
-            screen.scale,
-            screen.nativeScale
-        );
-    }
-
-    UIWindowScene *windowScene =
-        root.windowScene;
-
-    if (windowScene) {
-        NSString *role =
-            windowScene.session.role
-            ?: @"nil";
-
-        VMLLog(
-            @"ROOT WINDOWSCENE class=%@ role=%@ screenBounds=%@",
-            NSStringFromClass(
-                windowScene.class
-            ),
-            role,
-            NSStringFromCGRect(
-                windowScene.screen.bounds
-            )
-        );
-    }
-
-    VMLLogResponderChain(
-        root,
-        @"CPROOT"
-    );
-
-    VMLDumpTreeRecursive(
-        root,
-        0
-    );
-
-    VMLLog(
-        @"*** CARPLAY ROOT TREE DUMP COMPLETE ***"
-    );
 }
 
-#pragma mark - Schedule dump
+#pragma mark - Active scanner
 
-static void VMLScheduleDump(
-    UIWindow *root,
-    NSString *reason
-) {
-    if (!root)
+static void VMLScanScenes(void) {
+    if (!VMLIsSpringBoard())
         return;
 
-    if (gDumpScheduled)
-        return;
+    UIApplication *app =
+        UIApplication.sharedApplication;
 
-    gDumpScheduled =
-        YES;
+    NSSet<UIScene *> *scenes =
+        app.connectedScenes;
 
-    __weak UIWindow *weakRoot =
-        root;
+    BOOL found =
+        NO;
 
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            200 * NSEC_PER_MSEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            UIWindow *w =
-                weakRoot;
+    for (UIScene *scene
+         in scenes) {
 
-            if (!w)
-                return;
+        if (![scene
+                isKindOfClass:
+                    UIWindowScene.class]) {
 
-            VMLDumpCarPlayRoot(
-                w,
-                [NSString stringWithFormat:
-                    @"%@+200ms",
-                    reason]
+            continue;
+        }
+
+        UIWindowScene *ws =
+            (UIWindowScene *)scene;
+
+        NSArray<UIWindow *> *windows =
+            ws.windows;
+
+        for (UIWindow *window
+             in windows) {
+
+            if (!VMLIsCarPlayRootWindow(
+                    window)) {
+
+                continue;
+            }
+
+            found =
+                YES;
+
+            VMLProcessCarPlayRoot(
+                window,
+                @"connectedScenes"
             );
         }
-    );
+    }
+
+    if (!found) {
+        VMLLog(
+            @"SCANNER no CarPlay root in connectedScenes"
+        );
+    }
+}
+
+static void VMLScannerTick(void) {
+    if (!VMLIsSpringBoard()) {
+        gScannerRunning =
+            NO;
+
+        return;
+    }
+
+    VMLScanScenes();
 
     dispatch_after(
         dispatch_time(
@@ -638,96 +798,31 @@ static void VMLScheduleDump(
         ),
         dispatch_get_main_queue(),
         ^{
-            UIWindow *w =
-                weakRoot;
-
-            if (!w)
-                return;
-
-            VMLDumpCarPlayRoot(
-                w,
-                [NSString stringWithFormat:
-                    @"%@+1s",
-                    reason]
-            );
-        }
-    );
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            3 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            UIWindow *w =
-                weakRoot;
-
-            if (w) {
-                VMLDumpCarPlayRoot(
-                    w,
-                    [NSString stringWithFormat:
-                        @"%@+3s",
-                        reason]
-                );
-            }
-
-            gDumpScheduled =
-                NO;
+            VMLScannerTick();
         }
     );
 }
 
-#pragma mark - Capture root
-
-static void VMLCaptureRoot(
-    UIWindow *root,
-    NSString *reason
-) {
-    if (!VMLIsSpringBoard())
+static void VMLStartScanner(void) {
+    if (gScannerRunning)
         return;
 
-    if (!root)
-        return;
-
-    if (!VMLIsCarPlayRootWindow(root))
-        return;
-
-    BOOL changed =
-        gCarPlayRoot != root;
-
-    gCarPlayRoot =
-        root;
-
-    gRootCaptureCount++;
+    gScannerRunning =
+        YES;
 
     VMLLog(
-        @"*** CARPLAY ROOT CAPTURED #%lu reason=%@ class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f level=%f changed=%d ***",
-        (unsigned long)
-            gRootCaptureCount,
-        reason,
-        NSStringFromClass(
-            root.class
-        ),
-        NSStringFromCGRect(
-            root.frame
-        ),
-        NSStringFromCGRect(
-            root.bounds
-        ),
-        root.hidden,
-        root.alpha,
-        root.windowLevel,
-        changed
+        @"CARPLAY ACTIVE SCANNER STARTED"
     );
 
-    VMLScheduleDump(
-        root,
-        reason
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            VMLScannerTick();
+        }
     );
 }
 
-#pragma mark - UIView catcher
+#pragma mark - Lifecycle fallback
 
 %hook UIView
 
@@ -735,6 +830,9 @@ static void VMLCaptureRoot(
     %orig;
 
     if (!VMLIsSpringBoard())
+        return;
+
+    if (gAddingOwnView)
         return;
 
     UIWindow *window =
@@ -749,145 +847,9 @@ static void VMLCaptureRoot(
         return;
     }
 
-    NSString *className =
-        NSStringFromClass(
-            self.class
-        );
-
-    BOOL interesting =
-        self.bounds.size.width >= 400.0 ||
-        VMLInterestingClassName(
-            className
-        );
-
-    if (interesting) {
-        VMLLog(
-            @"DIDMOVE-CARPLAY class=%@ frame=%@ bounds=%@ super=%@ rootHidden=%d",
-            className,
-            NSStringFromCGRect(
-                self.frame
-            ),
-            NSStringFromCGRect(
-                self.bounds
-            ),
-            self.superview
-                ? NSStringFromClass(
-                    self.superview.class
-                )
-                : @"nil",
-            window.hidden
-        );
-    }
-
-    VMLCaptureRoot(
+    VMLProcessCarPlayRoot(
         window,
-        [NSString stringWithFormat:
-            @"UIView.didMove:%@",
-            className]
-    );
-}
-
-%end
-
-#pragma mark - UIWindow catchers
-
-%hook UIWindow
-
-- (void)addSubview:(UIView *)view {
-    %orig(view);
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.addSubview"
-    );
-}
-
-- (void)didAddSubview:(UIView *)subview {
-    %orig(subview);
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.didAddSubview"
-    );
-}
-
-- (void)setHidden:(BOOL)hidden {
-    %orig(hidden);
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        hidden
-            ? @"UIWindow.setHidden:YES"
-            : @"UIWindow.setHidden:NO"
-    );
-}
-
-- (void)setFrame:(CGRect)frame {
-    %orig(frame);
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.setFrame"
-    );
-}
-
-- (void)setBounds:(CGRect)bounds {
-    %orig(bounds);
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.setBounds"
-    );
-}
-
-- (void)layoutSubviews {
-    %orig;
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.layoutSubviews"
-    );
-}
-
-- (void)setWindowScene:(UIWindowScene *)windowScene {
-    %orig(windowScene);
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.setWindowScene"
-    );
-}
-
-- (void)makeKeyAndVisible {
-    %orig;
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLCaptureRoot(
-        self,
-        @"UIWindow.makeKeyAndVisible"
+        @"UIView.didMoveToWindow"
     );
 }
 
@@ -924,7 +886,7 @@ static UIWindowScene *VMLPhoneScene(void) {
     return nil;
 }
 
-#pragma mark - Create phone bubble
+#pragma mark - Phone bubble
 
 static void VMLCreatePhoneBubble(void) {
     if (gPhoneWindow)
@@ -973,7 +935,8 @@ static void VMLCreatePhoneBubble(void) {
         vc;
 
     UIView *bubble =
-        VMLMakePhoneBubble(
+        VMLMakeBubble(
+            kPhoneBubbleTag,
             size
         );
 
@@ -1006,7 +969,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"VML CARPLAY ROOT CATCHER V9.3 FIXED"
+            @"VML CARPLAY RENDER + ACTIVE SCANNER V10"
         );
 
         VMLLog(
@@ -1027,6 +990,17 @@ static void VMLCreatePhoneBubble(void) {
         dispatch_after(
             dispatch_time(
                 DISPATCH_TIME_NOW,
+                1 * NSEC_PER_SEC
+            ),
+            dispatch_get_main_queue(),
+            ^{
+                VMLStartScanner();
+            }
+        );
+
+        dispatch_after(
+            dispatch_time(
+                DISPATCH_TIME_NOW,
                 3 * NSEC_PER_SEC
             ),
             dispatch_get_main_queue(),
@@ -1036,7 +1010,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"V9.3 FIXED ACTIVE"
+            @"V10 ACTIVE"
         );
     }
 }
