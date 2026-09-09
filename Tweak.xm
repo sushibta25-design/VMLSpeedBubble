@@ -865,20 +865,17 @@ static void VMLProbeWindow(
 %hook UIWindow
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    id result =
-        %orig(frame);
+    id result = %orig(frame);
 
     if (VMLIsSpringBoard() &&
-        [result isKindOfClass:
-            UIWindow.class]) {
+        [result isKindOfClass:UIWindow.class]) {
 
-        UIWindow *window =
-            (UIWindow *)result;
+        UIWindow *window = (UIWindow *)result;
 
         dispatch_async(
             dispatch_get_main_queue(),
             ^{
-                VMLProbeWindow(
+                VMLCaptureRoot(
                     window,
                     @"initWithFrame"
                 );
@@ -889,23 +886,18 @@ static void VMLProbeWindow(
     return result;
 }
 
-- (instancetype)initWithWindowScene:
-    (UIWindowScene *)windowScene {
-
-    id result =
-        %orig(windowScene);
+- (instancetype)initWithWindowScene:(UIWindowScene *)windowScene {
+    id result = %orig(windowScene);
 
     if (VMLIsSpringBoard() &&
-        [result isKindOfClass:
-            UIWindow.class]) {
+        [result isKindOfClass:UIWindow.class]) {
 
-        UIWindow *window =
-            (UIWindow *)result;
+        UIWindow *window = (UIWindow *)result;
 
         dispatch_async(
             dispatch_get_main_queue(),
             ^{
-                VMLProbeWindow(
+                VMLCaptureRoot(
                     window,
                     @"initWithWindowScene"
                 );
@@ -916,46 +908,65 @@ static void VMLProbeWindow(
     return result;
 }
 
-- (void)setFrame:(CGRect)frame {
-    %orig(frame);
+- (void)addSubview:(UIView *)view {
+    %orig(view);
 
     if (!VMLIsSpringBoard())
         return;
 
-    VMLProbeWindow(
-        self,
-        @"setFrame"
+    UIWindow *window = self;
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            100 * NSEC_PER_MSEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLCaptureRoot(
+                window,
+                @"childAddedToRoot+100ms"
+            );
+        }
     );
+}
+
+- (void)setFrame:(CGRect)frame {
+    %orig(frame);
+
+    if (VMLIsSpringBoard()) {
+        VMLCaptureRoot(
+            self,
+            @"setFrame"
+        );
+    }
 }
 
 - (void)setBounds:(CGRect)bounds {
     %orig(bounds);
 
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLProbeWindow(
-        self,
-        @"setBounds"
-    );
+    if (VMLIsSpringBoard()) {
+        VMLCaptureRoot(
+            self,
+            @"setBounds"
+        );
+    }
 }
 
 - (void)setHidden:(BOOL)hidden {
     %orig(hidden);
 
-    if (!VMLIsSpringBoard())
-        return;
-
-    VMLProbeWindow(
-        self,
-        hidden
-            ? @"setHidden:YES"
-            : @"setHidden:NO"
-    );
+    if (VMLIsSpringBoard()) {
+        VMLCaptureRoot(
+            self,
+            hidden
+                ? @"setHidden:YES"
+                : @"setHidden:NO"
+        );
+    }
 }
 
 %end
-
 #pragma mark - UIView hooks
 
 %hook UIView
