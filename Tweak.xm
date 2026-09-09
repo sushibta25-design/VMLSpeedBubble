@@ -861,7 +861,18 @@ static void VMLProbeWindow(
 }
 
 #pragma mark - UIWindow hooks
+static void VMLCaptureRoot(
+    UIWindow *window,
+    NSString *reason
+) {
+    if (!window)
+        return;
 
+    VMLProbeWindow(
+        window,
+        reason
+    );
+}
 %hook UIWindow
 
 - (instancetype)initWithFrame:(CGRect)frame {
