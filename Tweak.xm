@@ -36,7 +36,7 @@ static void VMLLog(NSString *format, ...) {
 
     va_end(args);
 
-    NSLog(@"[VMLV11] %@", msg);
+    NSLog(@"[VMLV12] %@", msg);
 
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
@@ -939,28 +939,6 @@ static void VMLStartScanner(void) {
 
 %end
 
-// Also react to scene connect/disconnect notifications, so a wired
-// CarPlay session that appears without a matching UIView lifecycle
-// event still gets scanned immediately instead of waiting up to 1s
-// for the polling scanner.
-%hook UIWindowScene
-
-- (void)setActivationState:(UISceneActivationState)state {
-    %orig;
-
-    if (!VMLIsSpringBoard())
-        return;
-
-    dispatch_async(
-        dispatch_get_main_queue(),
-        ^{
-            VMLScanScenes();
-        }
-    );
-}
-
-%end
-
 #pragma mark - Phone scene
 
 static UIWindowScene *VMLPhoneScene(void) {
@@ -1077,7 +1055,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"VML CARPLAY RENDER + ACTIVE SCANNER V11 (wired+wireless)"
+            @"VML CARPLAY RENDER + ACTIVE SCANNER V12 (wired+wireless, stable)"
         );
 
         VMLLog(
@@ -1118,7 +1096,7 @@ static void VMLCreatePhoneBubble(void) {
         );
 
         VMLLog(
-            @"V11 ACTIVE"
+            @"V12 ACTIVE"
         );
     }
 }
