@@ -20,7 +20,7 @@ static const NSInteger kVMLLabelTag  = 990100;
 
 static NSInteger gVMLCurrentSpeed = 0;
 static int gVMLSpeedNotifyToken = 0;
-
+static void VMLCaptureRoot(UIWindow *window, NSString *reason);
 #pragma mark - Logging
 
 static void VMLLog(NSString *format, ...) {
