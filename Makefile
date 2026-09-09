@@ -5,8 +5,7 @@ THEOS_PACKAGE_SCHEME = roothide
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = VMLSpeedBubble
-
-VMLSpeedBubble_FILES = Tweak.xm
+VMLSpeedBubble_FILES = Tweak.xm RuntimeSniffer.xm
 VMLSpeedBubble_CFLAGS = -fobjc-arc
 VMLSpeedBubble_FRAMEWORKS = UIKit Foundation QuartzCore
 
