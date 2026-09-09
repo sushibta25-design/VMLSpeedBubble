@@ -30,7 +30,7 @@ static void VMLLog(NSString *format, ...) {
     NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
 
-    NSLog(@"[VMLV11.3] %@", msg);
+    NSLog(@"[VMLV11.4] %@", msg);
 
     NSString *line = [NSString stringWithFormat:@"%@\n", msg];
     FILE *f = fopen("/var/mobile/VMLHostSniffer.txt", "a");
@@ -224,6 +224,142 @@ static void VMLSchedulePhoneCreation(void) {
     dispatch_async(dispatch_get_main_queue(), retryBlock);
 }
 
+
+
+#pragma mark - Render path mapper
+
+static BOOL VMLInterestingRenderClass(NSString *className) {
+    if (!className) return NO;
+    NSArray<NSString *> *tokens = @[
+        @"Scene", @"Presentation", @"Host", @"Application",
+        @"Root", @"VisualEffect", @"CarPlay", @"Dashboard",
+        @"Display", @"Portal", @"Remote", @"Snapshot", @"Container"
+    ];
+    for (NSString *token in tokens) {
+        if (VMLContainsCI(className, token)) return YES;
+    }
+    return NO;
+}
+
+static void VMLLogLayerInfo(UIView *view, NSString *prefix) {
+    if (!view) return;
+    CALayer *layer = view.layer;
+    VMLLog(@"[map] %@ layer=%@ frame=%@ bounds=%@ hidden=%d opacity=%.3f z=%.3f masks=%d superlayer=%@",
+           prefix,
+           NSStringFromClass(layer.class),
+           NSStringFromCGRect(layer.frame),
+           NSStringFromCGRect(layer.bounds),
+           layer.hidden,
+           layer.opacity,
+           layer.zPosition,
+           layer.masksToBounds,
+           layer.superlayer ? NSStringFromClass(layer.superlayer.class) : @"nil");
+}
+
+static void VMLLogViewNode(UIView *view, NSInteger depth, NSString *kind) {
+    if (!view) return;
+    UIWindow *window = view.window;
+    VMLLog(@"[map] %@ depth=%ld class=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f clips=%d ui=%d super=%@ window=%@ subviews=%lu",
+           kind,
+           (long)depth,
+           NSStringFromClass(view.class),
+           NSStringFromCGRect(view.frame),
+           NSStringFromCGRect(view.bounds),
+           view.hidden,
+           view.alpha,
+           view.clipsToBounds,
+           view.userInteractionEnabled,
+           view.superview ? NSStringFromClass(view.superview.class) : @"nil",
+           window ? NSStringFromClass(window.class) : @"nil",
+           (unsigned long)view.subviews.count);
+}
+
+static void VMLDumpRenderTreeRecursive(UIView *view, NSInteger depth, NSUInteger *count) {
+    if (!view || !count) return;
+    if (depth > 14 || *count >= 220) return;
+    (*count)++;
+
+    NSString *className = NSStringFromClass(view.class);
+    BOOL interesting = VMLInterestingRenderClass(className);
+    if (depth <= 6 || interesting) {
+        VMLLogViewNode(view, depth, interesting ? @"TREE*" : @"TREE");
+        if (interesting) VMLLogLayerInfo(view, [NSString stringWithFormat:@"TREE*:%@", className]);
+    }
+
+    NSArray<UIView *> *children = [view.subviews copy];
+    for (UIView *child in children) {
+        VMLDumpRenderTreeRecursive(child, depth + 1, count);
+        if (*count >= 220) break;
+    }
+}
+
+static void VMLDumpHostSiblings(UIView *host) {
+    UIView *parent = host.superview;
+    if (!parent) {
+        VMLLog(@"[map] HOST SIBLINGS parent=nil");
+        return;
+    }
+
+    NSArray<UIView *> *siblings = [parent.subviews copy];
+    VMLLog(@"[map] ===== HOST SIBLINGS parent=%@ count=%lu =====",
+           NSStringFromClass(parent.class), (unsigned long)siblings.count);
+    NSInteger index = 0;
+    for (UIView *sibling in siblings) {
+        VMLLog(@"[map] sibling[%ld] %@%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f subviews=%lu",
+               (long)index,
+               sibling == host ? @"<HOST> " : @"",
+               NSStringFromClass(sibling.class),
+               NSStringFromCGRect(sibling.frame),
+               NSStringFromCGRect(sibling.bounds),
+               sibling.hidden,
+               sibling.alpha,
+               (unsigned long)sibling.subviews.count);
+        VMLLogLayerInfo(sibling, [NSString stringWithFormat:@"sibling[%ld]", (long)index]);
+        index++;
+    }
+    VMLLog(@"[map] ===== END HOST SIBLINGS =====");
+}
+
+static void VMLDumpSuperviewChainDetailed(UIView *host) {
+    VMLLog(@"[map] ===== HOST -> ROOT SUPER CHAIN =====");
+    UIView *v = host;
+    NSInteger depth = 0;
+    while (v && depth < 16) {
+        VMLLogViewNode(v, depth, @"SUPER");
+        VMLLogLayerInfo(v, [NSString stringWithFormat:@"SUPER[%ld]", (long)depth]);
+        VMLLogResponderChain(v, [NSString stringWithFormat:@"super[%ld]", (long)depth]);
+        v = v.superview;
+        depth++;
+    }
+    VMLLog(@"[map] ===== END SUPER CHAIN =====");
+}
+
+static void VMLDumpFullRenderPath(UIView *host, UIWindow *root, NSString *reason) {
+    if (!host || !root) return;
+
+    VMLLog(@"[map] ################################################");
+    VMLLog(@"[map] *** FULL CARPLAY RENDER PATH DUMP reason=%@ ***", reason);
+    VMLLog(@"[map] root=%@ frame=%@ bounds=%@ hidden=%d alpha=%.3f level=%.1f role=%@",
+           NSStringFromClass(root.class),
+           NSStringFromCGRect(root.frame),
+           NSStringFromCGRect(root.bounds),
+           root.hidden,
+           root.alpha,
+           root.windowLevel,
+           root.windowScene.session.role ?: @"nil");
+    VMLLogLayerInfo(root, @"ROOT");
+
+    VMLDumpHostSiblings(host);
+    VMLDumpSuperviewChainDetailed(host);
+
+    NSUInteger count = 0;
+    VMLLog(@"[map] ===== ROOT VIEW TREE BEGIN =====");
+    VMLDumpRenderTreeRecursive(root, 0, &count);
+    VMLLog(@"[map] ===== ROOT VIEW TREE END nodes=%lu =====", (unsigned long)count);
+    VMLLog(@"[map] *** FULL CARPLAY RENDER PATH DUMP COMPLETE ***");
+    VMLLog(@"[map] ################################################");
+}
+
 #pragma mark - CarPlay candidate / host
 
 static BOOL VMLLandscapeLike(CGSize size) {
@@ -311,6 +447,8 @@ static void VMLLogHostDiagnostics(UIView *host, UIWindow *root, NSString *reason
     VMLLogResponderChain(host, @"host");
     VMLLogResponderChain(root, @"root");
     VMLLog(@"[path] ===== END DIAGNOSTIC =====");
+
+    VMLDumpFullRenderPath(host, root, reason);
 }
 
 static void VMLAttachCarPlayBubble(UIView *host, UIWindow *root, NSString *reason) {
@@ -424,7 +562,7 @@ static void VMLScannerTick(void) {
 static void VMLStartScanner(void) {
     if (gScannerStarted) return;
     gScannerStarted = YES;
-    VMLLog(@"[scanner] V11.3 scanner started");
+    VMLLog(@"[scanner] V11.4 scanner started");
     dispatch_async(dispatch_get_main_queue(), ^{ VMLScannerTick(); });
 }
 
@@ -454,7 +592,7 @@ static void VMLStartScanner(void) {
         NSString *process = NSProcessInfo.processInfo.processName ?: @"";
 
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V11.3 CARBRIDGE BASELINE");
+        VMLLog(@"VML SPEED BUBBLE V11.4 RENDER PATH MAPPER");
         VMLLog(@"bundle=%@ process=%@", bundle, process);
         VMLLog(@"========================================");
 
@@ -468,6 +606,6 @@ static void VMLStartScanner(void) {
             VMLStartScanner();
         });
 
-        VMLLog(@"V11.3 ACTIVE");
+        VMLLog(@"V11.4 ACTIVE");
     }
 }
