@@ -1,6 +1,69 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <notify.h>
+
+
+static int gForegroundToken = 0;
+
+static void VMLPublishForegroundState(BOOL foreground) {
+    if (gForegroundToken == 0) {
+        int token = 0;
+        uint32_t status = notify_register_check(
+            "com.sushibta.vmlspeedbubble.vmlforeground",
+            &token
+        );
+
+        if (status != NOTIFY_STATUS_OK) {
+            NSLog(@"[VMLV12.4] foreground notify_register_check failed=%u", status);
+            return;
+        }
+
+        gForegroundToken = token;
+    }
+
+    notify_set_state(
+        gForegroundToken,
+        foreground ? 1 : 0
+    );
+
+    notify_post(
+        "com.sushibta.vmlspeedbubble.vmlforeground"
+    );
+
+    NSLog(@"[VMLV12.4] VML foreground=%d", foreground);
+}
+
+static void VMLInstallForegroundObservers(void) {
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+
+    [nc addObserverForName:UIApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *note) {
+        VMLPublishForegroundState(YES);
+    }];
+
+    [nc addObserverForName:UIApplicationWillResignActiveNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *note) {
+        VMLPublishForegroundState(NO);
+    }];
+
+    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *note) {
+        VMLPublishForegroundState(NO);
+    }];
+
+    // Publish initial state shortly after injection.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplicationState state = UIApplication.sharedApplication.applicationState;
+        VMLPublishForegroundState(state == UIApplicationStateActive);
+    });
+}
 
 static IMP gOrigMethodCallInit = NULL;
 static int gPublishToken = 0;
@@ -199,8 +262,10 @@ static void VMLStart(void) {
         return;
     }
 
+    VMLInstallForegroundObservers();
+
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V12.3");
+    VMLLog(@"VML RUNTIME BRIDGE V12.4");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());

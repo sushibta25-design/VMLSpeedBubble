@@ -3,6 +3,19 @@
 #import <QuartzCore/QuartzCore.h>
 #import <notify.h>
 
+
+@interface VMLPassthroughWindow : UIWindow
+@end
+
+@implementation VMLPassthroughWindow
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return NO;
+}
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    return nil;
+}
+@end
+
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
@@ -13,6 +26,8 @@ static UIWindow *gCarPlayOverlayWindow = nil;
 static UIView *gCarPlayBubble = nil;
 
 static BOOL gOverlayLoopRunning = NO;
+static int gVMLForegroundNotifyToken = 0;
+static BOOL gVMLForeground = NO;
 
 static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
@@ -217,6 +232,52 @@ static void VMLStartSpeedReceiver(void) {
     VMLReadSpeed();
 }
 
+
+#pragma mark - VietMap foreground state
+
+static void VMLReadForegroundState(void) {
+    if (gVMLForegroundNotifyToken == 0) return;
+
+    uint64_t state = 0;
+    uint32_t status = notify_get_state(gVMLForegroundNotifyToken, &state);
+    if (status != NOTIFY_STATUS_OK) return;
+
+    BOOL newValue = (state != 0);
+
+    if (gVMLForeground != newValue) {
+        gVMLForeground = newValue;
+        VMLLog(@"*** VML FOREGROUND STATE = %d ***", gVMLForeground);
+    }
+
+    if (gCarPlayOverlayWindow) {
+        gCarPlayOverlayWindow.hidden = gVMLForeground;
+    }
+}
+
+static void VMLStartForegroundReceiver(void) {
+    if (gVMLForegroundNotifyToken != 0) return;
+
+    int token = 0;
+    uint32_t status = notify_register_dispatch(
+        "com.sushibta.vmlspeedbubble.vmlforeground",
+        &token,
+        dispatch_get_main_queue(),
+        ^(int incomingToken) {
+            gVMLForegroundNotifyToken = incomingToken;
+            VMLReadForegroundState();
+        }
+    );
+
+    if (status != NOTIFY_STATUS_OK) {
+        VMLLog(@"foreground notify_register_dispatch failed=%u", status);
+        return;
+    }
+
+    gVMLForegroundNotifyToken = token;
+    VMLReadForegroundState();
+    VMLLog(@"VML FOREGROUND RECEIVER ACTIVE token=%d", token);
+}
+
 #pragma mark - Phone bubble
 
 static UIWindowScene *VMLPhoneScene(void) {
@@ -364,9 +425,8 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     if (!VMLIsCarPlayApp())
         return;
 
-    // Pull the shared speed state every tick as well as on notifications.
-    // This removes the "wait for the next UI load/event" feeling.
     VMLReadSpeed();
+    VMLReadForegroundState();
 
     UIWindowScene *scene =
         VMLFindCarPlayScene();
@@ -378,15 +438,48 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
 
     VMLDestroyOldOverlayIfNeeded(scene);
 
+    CGRect sceneBounds = scene.coordinateSpace.bounds;
+    if (CGRectIsEmpty(sceneBounds)) {
+        sceneBounds = scene.screen.bounds;
+    }
+
+    CGFloat sceneW = MAX(sceneBounds.size.width, 1.0);
+    CGFloat sceneH = MAX(sceneBounds.size.height, 1.0);
+
+    CGFloat size = MAX(42.0, MIN(56.0, sceneH * 0.20));
+
+    CGFloat x =
+        MAX(
+            8.0,
+            MIN(
+                sceneW - size - 8.0,
+                sceneW * 0.08
+            )
+        );
+
+    CGFloat y =
+        MAX(
+            8.0,
+            MIN(
+                sceneH - size - 8.0,
+                sceneH * 0.50
+            )
+        );
+
+    CGRect bubbleWindowFrame =
+        CGRectMake(x, y, size, size);
+
     if (!gCarPlayOverlayWindow) {
         gCarPlayOverlayWindow =
-            [[UIWindow alloc] initWithWindowScene:scene];
+            [[VMLPassthroughWindow alloc] initWithWindowScene:scene];
 
         gCarPlayOverlayWindow.backgroundColor =
             UIColor.clearColor;
 
+        // High enough to remain visible, but this is only a tiny non-key
+        // window covering the bubble area instead of the whole CarPlay screen.
         gCarPlayOverlayWindow.windowLevel =
-            UIWindowLevelAlert + 1000.0;
+            UIWindowLevelAlert + 100.0;
 
         gCarPlayOverlayWindow.userInteractionEnabled =
             NO;
@@ -403,105 +496,55 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         gCarPlayOverlayWindow.rootViewController =
             vc;
 
-        VMLLog(
-            @"[overlay] CREATED SINGLE window role=%@ screen=%@",
-            scene.session.role ?: @"nil",
-            NSStringFromCGRect(scene.screen.bounds)
-        );
-    }
-
-    CGRect bounds =
-        scene.coordinateSpace.bounds;
-
-    if (CGRectIsEmpty(bounds)) {
-        bounds = scene.screen.bounds;
-    }
-
-    gCarPlayOverlayWindow.frame = bounds;
-    gCarPlayOverlayWindow.hidden = NO;
-    gCarPlayOverlayWindow.alpha = 1.0;
-
-    UIView *root =
-        gCarPlayOverlayWindow.rootViewController.view;
-
-    root.frame =
-        gCarPlayOverlayWindow.bounds;
-
-    // V12.3: enforce ONE bubble in our overlay root.
-    NSArray<UIView *> *children =
-        [root.subviews copy];
-
-    UIView *kept = nil;
-
-    for (UIView *child in children) {
-        if (child.tag != kCarPlayBubbleTag)
-            continue;
-
-        if (!kept) {
-            kept = child;
-        } else {
-            [child removeFromSuperview];
-
-            VMLLog(
-                @"[overlay] REMOVED duplicate bubble"
-            );
-        }
-    }
-
-    if (!kept) {
-        CGFloat W =
-            MAX(root.bounds.size.width, 1.0);
-
-        CGFloat H =
-            MAX(root.bounds.size.height, 1.0);
-
-        CGFloat size =
-            MAX(42.0, MIN(56.0, H * 0.20));
-
-        kept =
+        UIView *bubble =
             VMLMakeBubble(
                 kCarPlayBubbleTag,
                 size
             );
 
-        CGFloat x =
-            MAX(
-                8.0,
-                MIN(
-                    W - size - 8.0,
-                    W * 0.08
-                )
-            );
-
-        CGFloat y =
-            MAX(
-                8.0,
-                MIN(
-                    H - size - 8.0,
-                    H * 0.50
-                )
-            );
-
-        kept.frame =
+        bubble.frame =
             CGRectMake(
-                x,
-                y,
+                0,
+                0,
                 size,
                 size
             );
 
-        [root addSubview:kept];
+        [vc.view addSubview:bubble];
+
+        gCarPlayBubble = bubble;
 
         VMLLog(
-            @"*** SINGLE CARPLAY BUBBLE CREATED V12.3 frame=%@ text=%@ ***",
-            NSStringFromCGRect(kept.frame),
-            VMLSpeedText()
+            @"*** SMALL PASS-THROUGH CARPLAY WINDOW CREATED V12.4 scene=%@ ***",
+            NSStringFromCGRect(sceneBounds)
         );
     }
 
-    gCarPlayBubble = kept;
+    gCarPlayOverlayWindow.frame =
+        bubbleWindowFrame;
 
-    VMLUpdateBubble(gCarPlayBubble);
+    gCarPlayOverlayWindow.rootViewController.view.frame =
+        CGRectMake(0, 0, size, size);
+
+    if (gCarPlayBubble) {
+        gCarPlayBubble.frame =
+            CGRectMake(0, 0, size, size);
+
+        VMLUpdateBubble(gCarPlayBubble);
+    }
+
+    // Automatically hide our sign while VietMap Live is the active app.
+    gCarPlayOverlayWindow.hidden =
+        gVMLForeground ? YES : NO;
+
+    gCarPlayOverlayWindow.alpha = 1.0;
+
+    VMLLog(
+        @"[overlay] frame=%@ hiddenForVML=%d speed=%ld",
+        NSStringFromCGRect(gCarPlayOverlayWindow.frame),
+        gVMLForeground,
+        (long)gCurrentSpeed
+    );
 }
 
 static void VMLOverlayTick(void) {
@@ -534,7 +577,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V12.3 SINGLE OVERLAY LOOP STARTED"
+        @"[overlay] V12.4 SAFE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -550,13 +593,13 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.3 SINGLE + INSTANT");
+        VMLLog(@"VML SPEED BUBBLE V12.4 SAFE GLOBAL");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
             VMLLog(
-                @"*** SPRINGBOARD INJECTION CONFIRMED V12.3 ***"
+                @"*** SPRINGBOARD INJECTION CONFIRMED V12.4 ***"
             );
 
             VMLStartSpeedReceiver();
@@ -572,20 +615,21 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V12.3 SPRINGBOARD ACTIVE");
+            VMLLog(@"V12.4 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
             VMLLog(
-                @"*** CARPLAY.APP INJECTION CONFIRMED V12.3 ***"
+                @"*** CARPLAY.APP INJECTION CONFIRMED V12.4 ***"
             );
 
             VMLStartSpeedReceiver();
+            VMLStartForegroundReceiver();
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V12.3 CARPLAY ACTIVE"
+                @"V12.4 CARPLAY ACTIVE"
             );
 
             return;
