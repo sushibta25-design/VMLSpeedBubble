@@ -14,8 +14,6 @@ static __weak UIView *gNativeCarPlayHost = nil;
 static UIView *gNativeCarPlayBubble = nil;
 static UIWindow *gCarPlayOverlayWindow = nil;
 static BOOL gOverlayRetryRunning = NO;
-static __weak UIViewController *gLastNativeController = nil;
-static BOOL gNativeWatchdogRunning = NO;
 
 static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
@@ -489,7 +487,6 @@ static void VMLHandleNativeCarPlayController(UIViewController *vc, NSString *rea
     NSString *name = NSStringFromClass(vc.class);
     if (!VMLClassLooksNativeCarPlayController(name)) return;
 
-    gLastNativeController = vc;
 
     VMLLog(@"[native] controller=%@ reason=%@ view=%@ frame=%@ window=%@",
            name,
@@ -515,61 +512,6 @@ static void VMLHandleNativeCarPlayController(UIViewController *vc, NSString *rea
     );
 }
 
-
-#pragma mark - Native CarPlay persistent watchdog
-
-static void VMLNativeWatchdogTick(void) {
-    if (!VMLIsCarPlayApp()) {
-        gNativeWatchdogRunning = NO;
-        return;
-    }
-
-    BOOL bubbleAlive =
-        gNativeCarPlayBubble &&
-        gNativeCarPlayBubble.superview &&
-        gNativeCarPlayBubble.window &&
-        !gNativeCarPlayBubble.hidden;
-
-    if (!bubbleAlive) {
-        UIViewController *vc = gLastNativeController;
-
-        if (vc) {
-            UIView *host = VMLPreferredNativeHost(vc);
-            if (host && host.window) {
-                VMLLog(@"[watchdog] bubble missing -> reattach host=%@ frame=%@",
-                       NSStringFromClass(host.class),
-                       NSStringFromCGRect(host.frame));
-
-                VMLAttachNativeCarPlayBubble(host, @"watchdog-reattach");
-            } else {
-                VMLLog(@"[watchdog] bubble missing, last controller has no live host");
-            }
-        } else {
-            VMLLog(@"[watchdog] bubble missing, no native controller captured yet");
-        }
-    } else {
-        VMLUpdateBubble(gNativeCarPlayBubble);
-    }
-
-    dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
-        dispatch_get_main_queue(),
-        ^{
-            VMLNativeWatchdogTick();
-        }
-    );
-}
-
-static void VMLStartNativeWatchdog(void) {
-    if (!VMLIsCarPlayApp() || gNativeWatchdogRunning) return;
-
-    gNativeWatchdogRunning = YES;
-    VMLLog(@"[watchdog] V12.1 native watchdog started");
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        VMLNativeWatchdogTick();
-    });
-}
 
 #pragma mark - Hooks
 
@@ -616,12 +558,12 @@ static void VMLStartNativeWatchdog(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.2 GLOBAL OVERLAY");
+        VMLLog(@"VML SPEED BUBBLE V12.2.1 GLOBAL OVERLAY FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
-            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V12.2 ***");
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V12.2.1 ***");
             VMLStartSpeedReceiver();
 
             dispatch_after(
@@ -632,15 +574,15 @@ static void VMLStartNativeWatchdog(void) {
                 }
             );
 
-            VMLLog(@"V12.2 SPRINGBOARD ACTIVE");
+            VMLLog(@"V12.2.1 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
-            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V12.2 ***");
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V12.2.1 ***");
             VMLStartSpeedReceiver();
             VMLStartOverlayRetry();
-            VMLLog(@"V12.2 NATIVE CARPLAY OVERLAY ACTIVE");
+            VMLLog(@"V12.2.1 NATIVE CARPLAY OVERLAY ACTIVE");
             return;
         }
     }
