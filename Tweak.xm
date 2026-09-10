@@ -776,7 +776,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V12.9 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.0 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -810,13 +810,13 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     // Hide ONLY when VietMap itself owns a visible CarPlay-sized scene.
     // Opening VietMap on the iPhone screen alone does not satisfy this.
     gCarPlayOverlayWindow.hidden =
-        gCarPlayShowsVietMap;
+        NO;
 
     gCarPlayOverlayWindow.alpha =
         1.0;
 
     VMLLog(
-        @"[overlay] V12.9 frame=%@ speed=%ld activeVMLExact=%d",
+        @"[overlay] V13.0 frame=%@ speed=%ld activeVMLExact=%d",
         NSStringFromCGRect(
             gCarPlayOverlayWindow.frame
         ),
@@ -855,7 +855,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V12.9 DECOUPLED SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.0 PROBE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -871,7 +871,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.9 DECOUPLED FOREGROUND");
+        VMLLog(@"VML SPEED BUBBLE V13.0 CARPLAY FOREGROUND PROBE");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -894,7 +894,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V12.9 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.0 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -907,7 +907,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V12.9 CARPLAY ACTIVE"
+                @"V13.0 CARPLAY ACTIVE"
             );
 
             return;
