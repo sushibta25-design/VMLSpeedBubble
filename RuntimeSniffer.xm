@@ -321,6 +321,7 @@ static void VMLPublishValidSpeed(NSInteger speed) {
     if (speed <= 0 || speed > 200)
         return;
 
+    // Keep the old fixed-name state channel for SpringBoard caching.
     if (gPublishToken == 0) {
         int token = 0;
 
@@ -330,31 +331,39 @@ static void VMLPublishValidSpeed(NSInteger speed) {
                 &token
             );
 
-        if (status != NOTIFY_STATUS_OK) {
-            VMLTrace(
-                @"TRACE PUBLISH register failed=%u",
-                status
-            );
-            return;
+        if (status == NOTIFY_STATUS_OK) {
+            gPublishToken =
+                token;
         }
-
-        gPublishToken =
-            token;
     }
 
-    notify_set_state(
-        gPublishToken,
-        (uint64_t)speed
-    );
+    if (gPublishToken != 0) {
+        notify_set_state(
+            gPublishToken,
+            (uint64_t)speed
+        );
+
+        notify_post(
+            "com.sushibta.vmlspeedbubble.speed"
+        );
+    }
+
+    // V14.6 primary live transport:
+    // encode the speed in the Darwin notification NAME itself.
+    // This avoids notify state visibility differences between processes.
+    NSString *encodedName =
+        [NSString stringWithFormat:
+            @"com.sushibta.vmlspeedbubble.speed.%ld",
+            (long)speed];
 
     notify_post(
-        "com.sushibta.vmlspeedbubble.speed"
+        encodedName.UTF8String
     );
 
     VMLTrace(
-        @"TRACE PUBLISH STATE speed=%ld token=%d",
+        @"TRACE ENCODED PUBLISH speed=%ld name=%@",
         (long)speed,
-        gPublishToken
+        encodedName
     );
 }
 
@@ -525,7 +534,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.5.1");
+    VMLLog(@"VML RUNTIME BRIDGE V14.6");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());

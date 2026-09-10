@@ -47,57 +47,9 @@
 
 static NSInteger gCurrentSpeed = 0;
 static void VMLTrace(NSString *format, ...);
-static NSString *VMLSpeedStatePath(void);
 static NSString *VMLBundle(void);
 
-static BOOL VMLWriteSharedSpeedFile(NSInteger speed) {
-    if (speed <= 0 || speed > 200)
-        return NO;
 
-    NSString *path =
-        VMLSpeedStatePath();
-
-    NSString *dir =
-        [path stringByDeletingLastPathComponent];
-
-    NSFileManager *fm =
-        NSFileManager.defaultManager;
-
-    NSError *dirError = nil;
-
-    [fm createDirectoryAtPath:dir
-  withIntermediateDirectories:YES
-                   attributes:nil
-                        error:&dirError];
-
-    NSString *text =
-        [NSString stringWithFormat:@"%ld\n", (long)speed];
-
-    NSError *error = nil;
-
-    BOOL ok =
-        [text writeToFile:path
-               atomically:NO
-                 encoding:NSUTF8StringEncoding
-                    error:&error];
-
-    VMLTrace(
-        @"TRACE RELAY WRITE speed=%ld ok=%d path=%@ bundle=%@ dirError=%@ error=%@",
-        (long)speed,
-        ok,
-        path,
-        VMLBundle(),
-        dirError ?: @"nil",
-        error ?: @"nil"
-    );
-
-    return ok;
-}
-
-static NSInteger VMLReadSharedSpeedFile(void);
-static void VMLApplySharedSpeed(NSString *reason);
-static void VMLCarPlayHardReadSpeed(NSString *reason);
-static void VMLStartCarPlaySpeedFallback(void);
 static int gSpeedNotifyToken = 0;
 static int gVMLCarPlaySceneToken = 0;
 static BOOL gVMLCarPlaySceneActive = NO;
@@ -260,107 +212,31 @@ static void VMLUpdateAllBubbles(void) {
 }
 
 
-#pragma mark - CarPlay speed state hard refresh
+#pragma mark - Speed IPC
 
-static void VMLCarPlayHardReadSpeed(NSString *reason) {
-    if (!VMLIsCarPlayApp())
+static void VMLBroadcastEncodedSpeed(NSInteger speed) {
+    if (speed <= 0 || speed > 200)
         return;
 
-    NSInteger speed =
-        VMLReadSharedSpeedFile();
+    NSString *name =
+        [NSString stringWithFormat:
+            @"com.sushibta.vmlspeedbubble.speed.%ld",
+            (long)speed];
+
+    notify_post(
+        name.UTF8String
+    );
 
     VMLTrace(
-        @"CP TRACE FILEREAD reason=%@ speed=%ld",
-        reason ?: @"nil",
+        @"TRACE SB ENCODED RELAY speed=%ld",
         (long)speed
     );
-
-    if (speed <= 0 || speed > 200)
-        return;
-
-    gCurrentSpeed =
-        speed;
-
-    if (gCarPlayBubble) {
-        UILabel *label =
-            (UILabel *)[gCarPlayBubble viewWithTag:kLabelTag];
-
-        if (label) {
-            label.text =
-                [NSString stringWithFormat:@"%ld", (long)speed];
-
-            VMLTrace(
-                @"CP TRACE LABEL HARDSET text=%@ reason=%@",
-                label.text ?: @"nil",
-                reason ?: @"nil"
-            );
-        }
-    }
 }
 
-
-#pragma mark - Shared speed file
-
-static NSString *VMLSpeedStatePath(void) {
-    return @"/var/tmp/VMLSpeedState.dat";
-}
-
-static NSInteger VMLReadSharedSpeedFile(void) {
-    NSError *error = nil;
-
-    NSString *text =
-        [NSString stringWithContentsOfFile:VMLSpeedStatePath()
-                                  encoding:NSUTF8StringEncoding
-                                     error:&error];
-
-    if (!text.length) {
-        VMLTrace(
-            @"TRACE FILE READ empty bundle=%@ error=%@",
-            VMLBundle(),
-            error ?: @"nil"
-        );
-        return -1;
-    }
-
-    NSInteger speed =
-        text.integerValue;
-
-    VMLTrace(
-        @"TRACE FILE READ speed=%ld bundle=%@",
-        (long)speed,
-        VMLBundle()
-    );
-
-    if (speed <= 0 || speed > 200)
-        return -1;
-
-    return speed;
-}
-
-static void VMLApplySharedSpeed(NSString *reason) {
-    NSInteger speed =
-        VMLReadSharedSpeedFile();
-
-    if (speed <= 0 || speed > 200)
-        return;
-
-    if (gCurrentSpeed != speed) {
-        gCurrentSpeed =
-            speed;
-
-        VMLTrace(
-            @"TRACE FILE ACCEPT speed=%ld bundle=%@ reason=%@",
-            (long)speed,
-            VMLBundle(),
-            reason ?: @"nil"
-        );
-    }
-
-    VMLUpdateAllBubbles();
-}
-
-
-static void VMLSpringBoardPrimeSharedSpeed(void) {
+static void VMLReadSpeed(void) {
+    // SpringBoard can see the fixed-name state correctly (proven by trace).
+    // It caches the latest valid speed and rebroadcasts it using the
+    // speed-encoded notification name.
     if (!VMLIsSpringBoard())
         return;
 
@@ -375,78 +251,32 @@ static void VMLSpringBoardPrimeSharedSpeed(void) {
             &state
         );
 
-    VMLTrace(
-        @"TRACE RELAY PRIME token=%d status=%u state=%llu",
-        gSpeedNotifyToken,
-        status,
-        state
-    );
-
     if (status != NOTIFY_STATUS_OK)
         return;
 
     NSInteger speed =
         (NSInteger)state;
 
-    if (speed > 0 && speed <= 200) {
-        VMLWriteSharedSpeedFile(
-            speed
-        );
-    }
-}
-
-#pragma mark - Speed IPC
-
-static void VMLReadSpeed(void) {
-    if (VMLIsSpringBoard()) {
-        if (gSpeedNotifyToken == 0)
-            return;
-
-        uint64_t state = 0;
-
-        uint32_t status =
-            notify_get_state(
-                gSpeedNotifyToken,
-                &state
-            );
-
-        VMLTrace(
-            @"TRACE RELAY RECEIVE token=%d status=%u state=%llu bundle=%@",
-            gSpeedNotifyToken,
-            status,
-            state,
-            VMLBundle()
-        );
-
-        if (status != NOTIFY_STATUS_OK)
-            return;
-
-        NSInteger speed =
-            (NSInteger)state;
-
-        if (speed <= 0 || speed > 200)
-            return;
-
-        gCurrentSpeed =
-            speed;
-
-        VMLWriteSharedSpeedFile(
-            speed
-        );
-
+    if (speed <= 0 || speed > 200)
         return;
-    }
 
-    if (VMLIsCarPlayApp()) {
-        VMLApplySharedSpeed(
-            @"carplay-read"
-        );
+    gCurrentSpeed =
+        speed;
 
-        return;
-    }
+    VMLTrace(
+        @"TRACE SB CACHE speed=%ld",
+        (long)speed
+    );
+
+    VMLBroadcastEncodedSpeed(
+        speed
+    );
 }
 
 static void VMLStartSpeedReceiver(void) {
+    if (!VMLIsSpringBoard())
+        return;
+
     if (gSpeedNotifyToken != 0)
         return;
 
@@ -461,19 +291,7 @@ static void VMLStartSpeedReceiver(void) {
                 gSpeedNotifyToken =
                     incomingToken;
 
-                VMLTrace(
-                    @"CP TRACE NOTIFY SIGNAL token=%d bundle=%@",
-                    incomingToken,
-                    VMLBundle()
-                );
-
                 VMLReadSpeed();
-
-                if (VMLIsCarPlayApp()) {
-                    VMLCarPlayHardReadSpeed(
-                        @"notify-callback"
-                    );
-                }
             }
         );
 
@@ -485,29 +303,139 @@ static void VMLStartSpeedReceiver(void) {
         return;
     }
 
-    gSpeedNotifyToken = token;
+    gSpeedNotifyToken =
+        token;
 
-    VMLLog(
-        @"SPEED RECEIVER ACTIVE token=%d bundle=%@",
-        token,
-        VMLBundle()
-    );
-
-    // Read immediately; RuntimeSniffer no longer replaces the shared
-    // state with 0, so this can return the latest valid limit at once.
     VMLReadSpeed();
-
-    if (VMLIsCarPlayApp()) {
-        VMLCarPlayHardReadSpeed(
-            @"receiver-start"
-        );
-    }
 }
 
 
 
 
 
+
+
+#pragma mark - Encoded speed IPC
+
+static NSMutableArray *gEncodedSpeedTokens = nil;
+static BOOL gSpringBoardRebroadcastRunning = NO;
+
+static void VMLApplyCarPlayEncodedSpeed(NSInteger speed) {
+    if (!VMLIsCarPlayApp())
+        return;
+
+    if (speed <= 0 || speed > 200)
+        return;
+
+    gCurrentSpeed =
+        speed;
+
+    if (gCarPlayBubble) {
+        UILabel *label =
+            (UILabel *)[gCarPlayBubble viewWithTag:kLabelTag];
+
+        if (label) {
+            label.text =
+                [NSString stringWithFormat:@"%ld", (long)speed];
+        }
+    }
+
+    VMLTrace(
+        @"CP TRACE ENCODED ACCEPT speed=%ld",
+        (long)speed
+    );
+}
+
+static void VMLStartEncodedSpeedReceiver(void) {
+    if (!VMLIsCarPlayApp())
+        return;
+
+    if (gEncodedSpeedTokens)
+        return;
+
+    gEncodedSpeedTokens =
+        [NSMutableArray arrayWithCapacity:200];
+
+    for (NSInteger speed = 1;
+         speed <= 200;
+         speed++) {
+
+        NSString *name =
+            [NSString stringWithFormat:
+                @"com.sushibta.vmlspeedbubble.speed.%ld",
+                (long)speed];
+
+        int token = 0;
+        NSInteger capturedSpeed =
+            speed;
+
+        uint32_t status =
+            notify_register_dispatch(
+                name.UTF8String,
+                &token,
+                dispatch_get_main_queue(),
+                ^(__unused int incomingToken) {
+                    VMLApplyCarPlayEncodedSpeed(
+                        capturedSpeed
+                    );
+                }
+            );
+
+        if (status == NOTIFY_STATUS_OK) {
+            [gEncodedSpeedTokens addObject:
+                @(token)];
+        }
+    }
+
+    VMLTrace(
+        @"CP TRACE ENCODED RECEIVER count=%lu",
+        (unsigned long)gEncodedSpeedTokens.count
+    );
+}
+
+static void VMLSpringBoardRebroadcastTick(void) {
+    if (!VMLIsSpringBoard()) {
+        gSpringBoardRebroadcastRunning =
+            NO;
+        return;
+    }
+
+    // Refresh the cached fixed-channel state, then rebroadcast the
+    // latest valid value using the encoded channel.
+    VMLReadSpeed();
+
+    if (gCurrentSpeed > 0 &&
+        gCurrentSpeed <= 200) {
+
+        VMLBroadcastEncodedSpeed(
+            gCurrentSpeed
+        );
+    }
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            1 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLSpringBoardRebroadcastTick();
+        }
+    );
+}
+
+static void VMLStartSpringBoardRebroadcast(void) {
+    if (!VMLIsSpringBoard() ||
+        gSpringBoardRebroadcastRunning) {
+
+        return;
+    }
+
+    gSpringBoardRebroadcastRunning =
+        YES;
+
+    VMLSpringBoardRebroadcastTick();
+}
 
 #pragma mark - VietMap CarPlay template scene receiver
 
@@ -977,15 +905,11 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         gCarPlayBubble =
             bubble;
 
-        VMLCarPlayHardReadSpeed(
-            @"overlay-created"
-        );
-
         ((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble =
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.5.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.6 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1003,9 +927,6 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         );
 
     if (gCarPlayBubble) {
-        VMLCarPlayHardReadSpeed(
-            @"overlay-refresh"
-        );
         if (!gCarPlayDragging) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
@@ -1069,52 +990,13 @@ static void VMLStartOverlayLoop(void) {
 }
 
 
-static BOOL gCarPlaySpeedFallbackRunning = NO;
-
-static void VMLCarPlaySpeedFallbackTick(void) {
-    if (!VMLIsCarPlayApp()) {
-        gCarPlaySpeedFallbackRunning = NO;
-        return;
-    }
-
-    VMLCarPlayHardReadSpeed(
-        @"fallback-1s"
-    );
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            1 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLCarPlaySpeedFallbackTick();
-        }
-    );
-}
-
-static void VMLStartCarPlaySpeedFallback(void) {
-    if (!VMLIsCarPlayApp() ||
-        gCarPlaySpeedFallbackRunning) {
-
-        return;
-    }
-
-    gCarPlaySpeedFallbackRunning = YES;
-
-    VMLTrace(
-        @"CP TRACE FALLBACK START"
-    );
-
-    VMLCarPlaySpeedFallbackTick();
-}
 
 #pragma mark - Start
 
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.5.1 PRIME BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V14.6 ENCODED SPEED IPC");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1124,15 +1006,17 @@ static void VMLStartCarPlaySpeedFallback(void) {
             );
 
             VMLStartSpeedReceiver();
+            VMLStartSpringBoardRebroadcast();
 
             
-            VMLSpringBoardPrimeSharedSpeed();VMLLog(@"V14.5.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.6 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
+            VMLStartEncodedSpeedReceiver();
             VMLStartCarPlaySceneReceiver();
-            VMLStartCarPlaySpeedFallback();
+            
             VMLLog(
                 @"*** CARPLAY.APP INJECTION CONFIRMED V12.6 ***"
             );
@@ -1141,7 +1025,7 @@ static void VMLStartCarPlaySpeedFallback(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.5.1 CARPLAY ACTIVE"
+                @"V14.6 CARPLAY ACTIVE"
             );
 
             return;
