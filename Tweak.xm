@@ -86,6 +86,29 @@ static void VMLLog(NSString *format, ...) {
     }
 }
 
+
+static void VMLTrace(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    NSString *msg =
+        [[NSString alloc] initWithFormat:format arguments:args];
+
+    va_end(args);
+
+    NSString *line =
+        [NSString stringWithFormat:@"%@\n", msg];
+
+    FILE *f =
+        fopen("/var/mobile/VMLSpeedTrace.txt", "a");
+
+    if (f) {
+        fprintf(f, "%s", line.UTF8String);
+        fclose(f);
+    }
+}
+
+
 #pragma mark - Process
 
 static NSString *VMLBundle(void) {
@@ -156,6 +179,12 @@ static void VMLUpdateBubble(UIView *bubble) {
 
     if (label) {
         label.text = VMLSpeedText();
+
+        VMLTrace(
+            @"TRACE LABEL text=%@ bundle=%@",
+            label.text ?: @"nil",
+            VMLBundle()
+        );
     }
 
     bubble.hidden = NO;
@@ -189,6 +218,14 @@ static void VMLReadSpeed(void) {
     uint32_t status =
         notify_get_state(gSpeedNotifyToken, &state);
 
+    VMLTrace(
+        @"TRACE RECEIVE token=%d status=%u state=%llu bundle=%@",
+        gSpeedNotifyToken,
+        status,
+        state,
+        VMLBundle()
+    );
+
     if (status != NOTIFY_STATUS_OK)
         return;
 
@@ -201,6 +238,12 @@ static void VMLReadSpeed(void) {
 
     if (gCurrentSpeed != speed) {
         gCurrentSpeed = speed;
+
+        VMLTrace(
+            @"TRACE ACCEPT speed=%ld bundle=%@",
+            (long)gCurrentSpeed,
+            VMLBundle()
+        );
 
         VMLLog(
             @"*** SPEED SYNC = %ld ***",
@@ -726,7 +769,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.0 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -811,7 +854,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.0 SMOOTH DRAG");
+        VMLLog(@"VML SPEED BUBBLE V14.1 SPEED PIPELINE TRACE");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -822,7 +865,7 @@ static void VMLStartOverlayLoop(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V14.0 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -836,7 +879,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.0 CARPLAY ACTIVE"
+                @"V14.1 CARPLAY ACTIVE"
             );
 
             return;

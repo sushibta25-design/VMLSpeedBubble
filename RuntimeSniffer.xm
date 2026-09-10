@@ -279,6 +279,29 @@ static void VMLLog(NSString *format, ...) {
     NSLog(@"[VMLV12.3] %@", msg);
 }
 
+
+static void VMLTrace(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    NSString *msg =
+        [[NSString alloc] initWithFormat:format arguments:args];
+
+    va_end(args);
+
+    NSString *line =
+        [NSString stringWithFormat:@"%@\n", msg];
+
+    FILE *f =
+        fopen("/var/mobile/VMLSpeedTrace.txt", "a");
+
+    if (f) {
+        fprintf(f, "%s", line.UTF8String);
+        fclose(f);
+    }
+}
+
+
 static NSInteger VMLSpeedFromObject(id obj) {
     if (!obj)
         return -1;
@@ -320,7 +343,13 @@ static void VMLPublishValidSpeed(NSInteger speed) {
     }
 
     uint32_t stateStatus =
-        notify_set_state(
+        VMLTrace(
+        @"TRACE PUBLISH speed=%ld token=%d",
+        (long)speed,
+        gPublishToken
+    );
+
+    notify_set_state(
             gPublishToken,
             (uint64_t)speed
         );
@@ -359,7 +388,29 @@ static id VMLHookMethodCallInit(
 
     NSInteger speed = -1;
 
-    // Source A: proven direct Flutter event.
+    if ([methodName isEqualToString:@"updateSpeedLimit"]) {
+        VMLTrace(
+            @"TRACE FLUTTER method=updateSpeedLimit argsClass=%@ args=%@",
+            NSStringFromClass([arguments class]),
+            arguments ?: @"nil"
+        );
+    } else if ([arguments isKindOfClass:NSDictionary.class]) {
+        NSDictionary *traceDict =
+            (NSDictionary *)arguments;
+
+        if (traceDict[@"speedLimit"] ||
+            traceDict[@"currentSpeedLimit"]) {
+
+            VMLTrace(
+                @"TRACE PAYLOAD method=%@ speedLimit=%@ currentSpeedLimit=%@",
+                methodName ?: @"nil",
+                traceDict[@"speedLimit"] ?: @"nil",
+                traceDict[@"currentSpeedLimit"] ?: @"nil"
+            );
+        }
+    }
+
+// Source A: proven direct Flutter event.
     if ([methodName isEqualToString:@"updateSpeedLimit"]) {
         speed =
             VMLSpeedFromObject(arguments);
@@ -483,7 +534,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.0");
+    VMLLog(@"VML RUNTIME BRIDGE V14.1");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
