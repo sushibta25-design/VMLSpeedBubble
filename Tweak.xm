@@ -46,6 +46,12 @@
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
+static int gOverspeedOnToken = 0;
+static int gOverspeedOffToken = 0;
+static BOOL gOverspeedActive = NO;
+static BOOL gOverspeedFlashOn = NO;
+static UIView *gOverspeedFlashView = nil;
+static BOOL gOverspeedFlashLoopRunning = NO;
 static void VMLBroadcastEncodedSpeed(NSInteger speed);
 static BOOL gCarPlayHasEncodedSpeed = NO;
 static void VMLTrace(NSString *format, ...);
@@ -585,6 +591,197 @@ static void VMLStartCarPlayReplayRequester(void) {
     VMLCarPlayReplayRequestTick();
 }
 
+
+#pragma mark - SOS overspeed full-screen flash
+
+static void VMLAttachOverspeedViewIfNeeded(void) {
+    if (!VMLIsCarPlayApp() ||
+        !gCarPlayOverlayWindow ||
+        !gCarPlayOverlayWindow.rootViewController) {
+
+        return;
+    }
+
+    UIView *canvas =
+        gCarPlayOverlayWindow.rootViewController.view;
+
+    if (!canvas)
+        return;
+
+    if (!gOverspeedFlashView) {
+        UIView *flash =
+            [[UIView alloc] initWithFrame:canvas.bounds];
+
+        flash.autoresizingMask =
+            UIViewAutoresizingFlexibleWidth |
+            UIViewAutoresizingFlexibleHeight;
+
+        flash.backgroundColor =
+            [UIColor colorWithRed:1.0
+                            green:0.0
+                             blue:0.0
+                            alpha:1.0];
+
+        flash.userInteractionEnabled =
+            NO;
+
+        flash.hidden =
+            YES;
+
+        flash.alpha =
+            0.0;
+
+        [canvas insertSubview:flash
+                     atIndex:0];
+
+        gOverspeedFlashView =
+            flash;
+    } else if (gOverspeedFlashView.superview != canvas) {
+        [gOverspeedFlashView removeFromSuperview];
+
+        gOverspeedFlashView.frame =
+            canvas.bounds;
+
+        [canvas insertSubview:gOverspeedFlashView
+                     atIndex:0];
+    }
+}
+
+static void VMLOverspeedFlashTick(void) {
+    if (!VMLIsCarPlayApp()) {
+        gOverspeedFlashLoopRunning =
+            NO;
+        return;
+    }
+
+    VMLAttachOverspeedViewIfNeeded();
+
+    if (gOverspeedFlashView) {
+        if (gOverspeedActive) {
+            gOverspeedFlashOn =
+                !gOverspeedFlashOn;
+
+            gOverspeedFlashView.hidden =
+                NO;
+
+            [UIView performWithoutAnimation:^{
+                gOverspeedFlashView.alpha =
+                    gOverspeedFlashOn ? 0.38 : 0.10;
+            }];
+        } else {
+            gOverspeedFlashOn =
+                NO;
+
+            gOverspeedFlashView.alpha =
+                0.0;
+
+            gOverspeedFlashView.hidden =
+                YES;
+        }
+    }
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            250 * NSEC_PER_MSEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLOverspeedFlashTick();
+        }
+    );
+}
+
+static void VMLStartOverspeedFlashLoop(void) {
+    if (!VMLIsCarPlayApp() ||
+        gOverspeedFlashLoopRunning) {
+
+        return;
+    }
+
+    gOverspeedFlashLoopRunning =
+        YES;
+
+    VMLOverspeedFlashTick();
+}
+
+static void VMLSetOverspeedActive(BOOL active) {
+    if (!VMLIsCarPlayApp())
+        return;
+
+    gOverspeedActive =
+        active;
+
+    VMLAttachOverspeedViewIfNeeded();
+
+    if (!active &&
+        gOverspeedFlashView) {
+
+        gOverspeedFlashOn =
+            NO;
+
+        gOverspeedFlashView.alpha =
+            0.0;
+
+        gOverspeedFlashView.hidden =
+            YES;
+    }
+
+    VMLTrace(
+        @"SOS CARPLAY ACTIVE=%d",
+        active
+    );
+}
+
+static void VMLStartOverspeedReceiver(void) {
+    if (!VMLIsCarPlayApp())
+        return;
+
+    if (gOverspeedOnToken == 0) {
+        int token = 0;
+
+        uint32_t status =
+            notify_register_dispatch(
+                "com.sushibta.vmlspeedbubble.overspeed.on",
+                &token,
+                dispatch_get_main_queue(),
+                ^(__unused int incomingToken) {
+                    VMLSetOverspeedActive(
+                        YES
+                    );
+                }
+            );
+
+        if (status == NOTIFY_STATUS_OK) {
+            gOverspeedOnToken =
+                token;
+        }
+    }
+
+    if (gOverspeedOffToken == 0) {
+        int token = 0;
+
+        uint32_t status =
+            notify_register_dispatch(
+                "com.sushibta.vmlspeedbubble.overspeed.off",
+                &token,
+                dispatch_get_main_queue(),
+                ^(__unused int incomingToken) {
+                    VMLSetOverspeedActive(
+                        NO
+                    );
+                }
+            );
+
+        if (status == NOTIFY_STATUS_OK) {
+            gOverspeedOffToken =
+                token;
+        }
+    }
+
+    VMLStartOverspeedFlashLoop();
+}
+
 #pragma mark - VietMap CarPlay template scene receiver
 
 static void VMLReadCarPlaySceneState(void) {
@@ -1057,7 +1254,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V15.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V15.2 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1091,6 +1288,8 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     // Hide ONLY when VietMap itself owns a visible CarPlay-sized scene.
     // Opening VietMap on the iPhone screen alone does not satisfy this.
     gCarPlayOverlayWindow.hidden = gVMLCarPlaySceneActive;
+
+    VMLAttachOverspeedViewIfNeeded();
 
     gCarPlayOverlayWindow.alpha =
         1.0;
@@ -1144,7 +1343,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.1 SPLIT INJECTION");
+        VMLLog(@"VML SPEED BUBBLE V15.2 SOS OVERSPEED");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1159,11 +1358,12 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V15.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V15.2 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
+            VMLStartOverspeedReceiver();
             VMLStartEncodedSpeedReceiver();
             VMLStartCarPlayReplayRequester();
             VMLStartCarPlaySceneReceiver();
@@ -1176,7 +1376,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V15.1 CARPLAY ACTIVE"
+                @"V15.2 CARPLAY ACTIVE"
             );
 
             return;

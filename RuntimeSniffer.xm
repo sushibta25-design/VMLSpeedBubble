@@ -13,6 +13,10 @@ static int gPublishToken = 0;
 static void VMLPublishValidSpeed(NSInteger speed);
 static int gReplayRequestToken = 0;
 static NSInteger gLastValidSpeed = -1;
+static NSInteger gCurrentVehicleSpeed = -1;
+static NSInteger gCurrentRoadLimit = -1;
+static BOOL gLastOverspeedState = NO;
+static BOOL gHaveOverspeedState = NO;
 static uint64_t gPublisherSequence = 0;
 
 static int gCarPlaySceneToken = 0;
@@ -321,6 +325,46 @@ static NSInteger VMLSpeedFromObject(id obj) {
 }
 
 
+
+static void VMLPublishOverspeedState(BOOL overspeed) {
+    if (gHaveOverspeedState &&
+        gLastOverspeedState == overspeed) {
+
+        return;
+    }
+
+    gLastOverspeedState = overspeed;
+    gHaveOverspeedState = YES;
+
+    const char *name =
+        overspeed
+            ? "com.sushibta.vmlspeedbubble.overspeed.on"
+            : "com.sushibta.vmlspeedbubble.overspeed.off";
+
+    notify_post(name);
+
+    VMLTrace(
+        @"SOS OVERSPEED=%d current=%ld limit=%ld",
+        overspeed,
+        (long)gCurrentVehicleSpeed,
+        (long)gCurrentRoadLimit
+    );
+}
+
+static void VMLRecomputeOverspeed(void) {
+    if (gCurrentVehicleSpeed < 0 ||
+        gCurrentRoadLimit <= 0 ||
+        gCurrentRoadLimit > 200) {
+
+        VMLPublishOverspeedState(NO);
+        return;
+    }
+
+    VMLPublishOverspeedState(
+        gCurrentVehicleSpeed > gCurrentRoadLimit
+    );
+}
+
 static void VMLPublishValidSpeed(NSInteger speed) {
     if (speed <= 0 || speed > 200) {
         VMLTrace(
@@ -505,6 +549,44 @@ static id VMLHookMethodCallInit(
 
     NSInteger speed = -1;
 
+    if ([methodName isEqualToString:@"updateCurrentSpeed"]) {
+        NSInteger current =
+            VMLSpeedFromObject(arguments);
+
+        if (current >= 0 && current <= 300) {
+            gCurrentVehicleSpeed =
+                current;
+
+            VMLRecomputeOverspeed();
+        }
+    }
+
+    if ([methodName isEqualToString:@"updateSpeedLimit"]) {
+        NSInteger limit =
+            VMLSpeedFromObject(arguments);
+
+        if (limit > 0 && limit <= 200) {
+            gCurrentRoadLimit =
+                limit;
+
+            VMLRecomputeOverspeed();
+        }
+    }
+
+    // VietMap also publishes its own overSpeedLimit boolean.
+    // Use it as an immediate confirmation/fallback signal.
+    if ([methodName isEqualToString:@"overSpeedLimit"]) {
+        NSInteger flag =
+            VMLSpeedFromObject(arguments);
+
+        if (flag == 0 || flag == 1) {
+            VMLPublishOverspeedState(
+                flag == 1
+            );
+        }
+    }
+
+
     if ([methodName isEqualToString:@"updateSpeedLimit"]) {
         VMLTrace(
             @"TRACE FLUTTER method=updateSpeedLimit argsClass=%@ args=%@",
@@ -676,7 +758,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V15.1");
+    VMLLog(@"VML RUNTIME BRIDGE V15.2");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
