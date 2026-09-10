@@ -20,6 +20,8 @@
 
 static NSInteger gCurrentSpeed = 0;
 static int gSpeedNotifyToken = 0;
+static int gVMLCarPlayVisibleToken = 0;
+static BOOL gVMLCarPlayVisible = NO;
 
 static UIWindow *gPhoneWindow = nil;
 static UIWindow *gCarPlayOverlayWindow = nil;
@@ -230,6 +232,68 @@ static void VMLStartSpeedReceiver(void) {
     VMLReadSpeed();
 }
 
+
+
+#pragma mark - VietMap-on-CarPlay visibility receiver
+
+static void VMLReadCarPlayVisibleState(void) {
+    if (gVMLCarPlayVisibleToken == 0)
+        return;
+
+    uint64_t state = 0;
+
+    if (notify_get_state(
+            gVMLCarPlayVisibleToken,
+            &state
+        ) != NOTIFY_STATUS_OK) {
+        return;
+    }
+
+    BOOL visible = (state != 0);
+
+    if (visible != gVMLCarPlayVisible) {
+        gVMLCarPlayVisible = visible;
+
+        VMLLog(
+            @"*** VML ON CARPLAY = %d ***",
+            gVMLCarPlayVisible
+        );
+    }
+}
+
+static void VMLStartCarPlayVisibleReceiver(void) {
+    if (gVMLCarPlayVisibleToken != 0)
+        return;
+
+    int token = 0;
+
+    uint32_t status =
+        notify_register_dispatch(
+            "com.sushibta.vmlspeedbubble.vmlcarplayvisible",
+            &token,
+            dispatch_get_main_queue(),
+            ^(int incomingToken) {
+                gVMLCarPlayVisibleToken = incomingToken;
+                VMLReadCarPlayVisibleState();
+            }
+        );
+
+    if (status != NOTIFY_STATUS_OK) {
+        VMLLog(
+            @"carplay-visible receiver failed=%u",
+            status
+        );
+        return;
+    }
+
+    gVMLCarPlayVisibleToken = token;
+    VMLReadCarPlayVisibleState();
+
+    VMLLog(
+        @"CARPLAY VML VISIBILITY RECEIVER ACTIVE token=%d",
+        token
+    );
+}
 
 #pragma mark - Phone bubble
 
@@ -490,7 +554,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V12.6 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V12.7 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -521,20 +585,21 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         );
     }
 
-    // Always visible. No dependency on VietMap foreground state,
-    // CarBridge, or DuoDash.
+    // Hide ONLY when VietMap itself owns a visible CarPlay-sized scene.
+    // Opening VietMap on the iPhone screen alone does not satisfy this.
     gCarPlayOverlayWindow.hidden =
-        NO;
+        gVMLCarPlayVisible;
 
     gCarPlayOverlayWindow.alpha =
         1.0;
 
     VMLLog(
-        @"[overlay] V12.6 frame=%@ speed=%ld",
+        @"[overlay] V12.7 frame=%@ speed=%ld vmlCarPlay=%d",
         NSStringFromCGRect(
             gCarPlayOverlayWindow.frame
         ),
-        (long)gCurrentSpeed
+        (long)gCurrentSpeed,
+        gVMLCarPlayVisible
     );
 }
 
@@ -568,7 +633,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V12.6 CLEAN SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V12.7 CARPLAY-AWARE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -584,7 +649,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.6 CLEAN GLOBAL OVERLAY");
+        VMLLog(@"VML SPEED BUBBLE V12.7 CARPLAY-AWARE GLOBAL OVERLAY");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -606,11 +671,12 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V12.6 SPRINGBOARD ACTIVE");
+            VMLLog(@"V12.7 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
+            VMLStartCarPlayVisibleReceiver();
             VMLLog(
                 @"*** CARPLAY.APP INJECTION CONFIRMED V12.6 ***"
             );
@@ -619,7 +685,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V12.6 CARPLAY ACTIVE"
+                @"V12.7 CARPLAY ACTIVE"
             );
 
             return;

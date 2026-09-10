@@ -1,3 +1,4 @@
+#import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <notify.h>
@@ -5,7 +6,104 @@
 
 
 static IMP gOrigMethodCallInit = NULL;
+static void VMLLog(NSString *format, ...);
+
 static int gPublishToken = 0;
+
+static int gCarPlayVisibleToken = 0;
+static BOOL gLastCarPlayVisible = NO;
+static BOOL gHaveCarPlayVisibleState = NO;
+
+static BOOL VMLLooksLikeExternalCarPlayScreen(UIScreen *screen) {
+    if (!screen) return NO;
+
+    CGSize s = screen.bounds.size;
+    CGFloat w = MAX(s.width, s.height);
+    CGFloat h = MIN(s.width, s.height);
+
+    // Proven CarPlay layouts on this setup are ~640x240 and ~426.67x240.
+    return (h >= 180.0 && h <= 300.0 && w >= 400.0);
+}
+
+static void VMLPublishCarPlayVisible(BOOL visible) {
+    if (gCarPlayVisibleToken == 0) {
+        int token = 0;
+        uint32_t status =
+            notify_register_check(
+                "com.sushibta.vmlspeedbubble.vmlcarplayvisible",
+                &token
+            );
+
+        if (status != NOTIFY_STATUS_OK) {
+            VMLLog(@"carplay-visible notify_register_check failed=%u", status);
+            return;
+        }
+
+        gCarPlayVisibleToken = token;
+    }
+
+    notify_set_state(
+        gCarPlayVisibleToken,
+        visible ? 1 : 0
+    );
+
+    notify_post(
+        "com.sushibta.vmlspeedbubble.vmlcarplayvisible"
+    );
+
+    if (!gHaveCarPlayVisibleState || gLastCarPlayVisible != visible) {
+        VMLLog(
+            @"*** VML CARPLAY VISIBLE = %d ***",
+            visible
+        );
+    }
+
+    gLastCarPlayVisible = visible;
+    gHaveCarPlayVisibleState = YES;
+}
+
+static BOOL VMLHasVisibleCarPlayScene(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+
+    for (UIScene *scene in app.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class])
+            continue;
+
+        UIWindowScene *ws = (UIWindowScene *)scene;
+
+        if (!VMLLooksLikeExternalCarPlayScreen(ws.screen))
+            continue;
+
+        if (ws.activationState == UISceneActivationStateUnattached)
+            continue;
+
+        BOOL hasVisibleWindow = NO;
+
+        for (UIWindow *window in ws.windows) {
+            if (!window.hidden && window.alpha > 0.01) {
+                hasVisibleWindow = YES;
+                break;
+            }
+        }
+
+        if (hasVisibleWindow)
+            return YES;
+    }
+
+    return NO;
+}
+
+static void VMLStartCarPlayVisibilityWatcher(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VMLPublishCarPlayVisible(VMLHasVisibleCarPlayScene());
+
+        [NSTimer scheduledTimerWithTimeInterval:0.35
+                                        repeats:YES
+                                          block:^(__unused NSTimer *timer) {
+            VMLPublishCarPlayVisible(VMLHasVisibleCarPlayScene());
+        }];
+    });
+}
 
 static NSString *VMLLogPath(void) {
     NSString *documents =
@@ -201,8 +299,10 @@ static void VMLStart(void) {
         return;
     }
 
+    VMLStartCarPlayVisibilityWatcher();
+
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V12.6");
+    VMLLog(@"VML RUNTIME BRIDGE V12.7");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
