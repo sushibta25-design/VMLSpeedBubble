@@ -5,6 +5,8 @@
 static IMP gOrigMethodCallInit = NULL;
 static int gPublishToken = 0;
 
+static void VMLLog(NSString *format, ...);
+
 static NSString *VMLLastSpeedPath(void) {
     return @"/var/mobile/VMLLastSpeed.txt";
 }
