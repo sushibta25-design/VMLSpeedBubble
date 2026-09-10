@@ -342,8 +342,7 @@ static void VMLPublishValidSpeed(NSInteger speed) {
         gPublishToken = token;
     }
 
-    uint32_t stateStatus =
-        VMLTrace(
+    VMLTrace(
         @"TRACE PUBLISH speed=%ld token=%d",
         (long)speed,
         gPublishToken
@@ -527,7 +526,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.1.1");
+    VMLLog(@"VML RUNTIME BRIDGE V14.1.2");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
