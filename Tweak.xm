@@ -321,13 +321,6 @@ static void VMLStartCarPlaySceneReceiver(void) {
 
 #pragma mark - Phone VietMap foreground receiver
 
-static void VMLApplyPhoneVisibility(void) {
-    if (!gPhoneWindow)
-        return;
-
-    gPhoneWindow.hidden =
-        gPhoneForeground;
-}
 
 static void VMLReadPhoneForeground(void) {
     if (gPhoneForegroundToken == 0)
@@ -859,7 +852,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.6 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.6.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -898,7 +891,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         1.0;
 
     VMLLog(
-        @"[overlay] V13.6 frame=%@ speed=%ld cpScene=%d",
+        @"[overlay] V13.6.1 frame=%@ speed=%ld cpScene=%d",
         NSStringFromCGRect(gCarPlayOverlayWindow.frame),
         (long)gCurrentSpeed,
         gVMLCarPlaySceneActive
@@ -935,7 +928,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V13.6.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.6.1.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -951,7 +944,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.6 SAFE ROLLBACK");
+        VMLLog(@"VML SPEED BUBBLE V13.6.1 SAFE BUILD FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -974,7 +967,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.6 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.6.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -988,7 +981,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.6 CARPLAY ACTIVE"
+                @"V13.6.1 CARPLAY ACTIVE"
             );
 
             return;
