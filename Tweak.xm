@@ -9,17 +9,21 @@
 @end
 
 @implementation VMLPassthroughWindow
+
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return NO;
+    return [super pointInside:point withEvent:event];
 }
+
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    return nil;
+    return [super hitTest:point withEvent:event];
 }
+
 @end
 
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
+static void VMLRefreshPhoneFrontmostState(void);
 static int gSpeedNotifyToken = 0;
 static int gVMLCarPlaySceneToken = 0;
 static BOOL gVMLCarPlaySceneActive = NO;
@@ -28,6 +32,8 @@ static BOOL gPhoneForeground = NO;
 
 static UIWindow *gPhoneWindow = nil;
 static UIWindow *gCarPlayOverlayWindow = nil;
+static CGPoint gCarPlayBubbleCenterRatio = {0.0, 0.0};
+static BOOL gCarPlayBubblePositionLoaded = NO;
 static UIView *gCarPlayBubble = nil;
 
 static BOOL gOverlayLoopRunning = NO;
@@ -719,6 +725,215 @@ static void VMLDestroyOldOverlayIfNeeded(UIWindowScene *wantedScene) {
     VMLLog(@"[overlay] discarded stale overlay window");
 }
 
+
+static NSString *VMLCarPlayPosKeyX(void) {
+    return @"VMLSpeedBubble.CarPlayPosX";
+}
+
+static NSString *VMLCarPlayPosKeyY(void) {
+    return @"VMLSpeedBubble.CarPlayPosY";
+}
+
+static void VMLLoadCarPlayBubblePosition(void) {
+    if (gCarPlayBubblePositionLoaded)
+        return;
+
+    NSUserDefaults *defaults =
+        NSUserDefaults.standardUserDefaults;
+
+    CGFloat x =
+        [defaults doubleForKey:VMLCarPlayPosKeyX()];
+
+    CGFloat y =
+        [defaults doubleForKey:VMLCarPlayPosKeyY()];
+
+    if (x > 0.0 && x < 1.0 &&
+        y > 0.0 && y < 1.0) {
+
+        gCarPlayBubbleCenterRatio =
+            CGPointMake(x, y);
+    } else {
+        // Default close to the old V12/V13 location.
+        gCarPlayBubbleCenterRatio =
+            CGPointMake(0.08, 0.60);
+    }
+
+    gCarPlayBubblePositionLoaded =
+        YES;
+}
+
+static void VMLSaveCarPlayBubblePosition(void) {
+    if (!gCarPlayBubblePositionLoaded)
+        return;
+
+    NSUserDefaults *defaults =
+        NSUserDefaults.standardUserDefaults;
+
+    [defaults setDouble:gCarPlayBubbleCenterRatio.x
+                 forKey:VMLCarPlayPosKeyX()];
+
+    [defaults setDouble:gCarPlayBubbleCenterRatio.y
+                 forKey:VMLCarPlayPosKeyY()];
+
+    [defaults synchronize];
+}
+
+static CGRect VMLCarPlayBubbleFrameForScene(
+    CGRect sceneBounds,
+    CGFloat size
+) {
+    VMLLoadCarPlayBubblePosition();
+
+    CGFloat W =
+        MAX(sceneBounds.size.width, 1.0);
+
+    CGFloat H =
+        MAX(sceneBounds.size.height, 1.0);
+
+    CGFloat centerX =
+        gCarPlayBubbleCenterRatio.x * W;
+
+    CGFloat centerY =
+        gCarPlayBubbleCenterRatio.y * H;
+
+    CGFloat half =
+        size / 2.0;
+
+    centerX =
+        MAX(
+            half + 4.0,
+            MIN(
+                W - half - 4.0,
+                centerX
+            )
+        );
+
+    centerY =
+        MAX(
+            half + 4.0,
+            MIN(
+                H - half - 4.0,
+                centerY
+            )
+        );
+
+    return CGRectMake(
+        centerX - half,
+        centerY - half,
+        size,
+        size
+    );
+}
+
+static void VMLHandleCarPlayBubblePan(
+    UIPanGestureRecognizer *pan
+) {
+    if (!gCarPlayOverlayWindow ||
+        !gCarPlayOverlayWindow.windowScene) {
+
+        return;
+    }
+
+    UIWindowScene *scene =
+        gCarPlayOverlayWindow.windowScene;
+
+    CGRect sceneBounds =
+        scene.coordinateSpace.bounds;
+
+    if (CGRectIsEmpty(sceneBounds)) {
+        sceneBounds =
+            scene.screen.bounds;
+    }
+
+    CGPoint translation =
+        [pan translationInView:nil];
+
+    CGRect frame =
+        gCarPlayOverlayWindow.frame;
+
+    frame.origin.x +=
+        translation.x;
+
+    frame.origin.y +=
+        translation.y;
+
+    CGFloat margin = 4.0;
+
+    frame.origin.x =
+        MAX(
+            margin,
+            MIN(
+                sceneBounds.size.width -
+                    frame.size.width -
+                    margin,
+                frame.origin.x
+            )
+        );
+
+    frame.origin.y =
+        MAX(
+            margin,
+            MIN(
+                sceneBounds.size.height -
+                    frame.size.height -
+                    margin,
+                frame.origin.y
+            )
+        );
+
+    gCarPlayOverlayWindow.frame =
+        frame;
+
+    [pan setTranslation:CGPointZero
+                 inView:nil];
+
+    CGFloat centerX =
+        CGRectGetMidX(frame);
+
+    CGFloat centerY =
+        CGRectGetMidY(frame);
+
+    gCarPlayBubbleCenterRatio =
+        CGPointMake(
+            centerX /
+                MAX(sceneBounds.size.width, 1.0),
+            centerY /
+                MAX(sceneBounds.size.height, 1.0)
+        );
+
+    gCarPlayBubblePositionLoaded =
+        YES;
+
+    if (pan.state ==
+        UIGestureRecognizerStateEnded ||
+        pan.state ==
+        UIGestureRecognizerStateCancelled) {
+
+        VMLSaveCarPlayBubblePosition();
+
+        VMLLog(
+            @"*** CARPLAY BUBBLE MOVED x=%.3f y=%.3f ***",
+            gCarPlayBubbleCenterRatio.x,
+            gCarPlayBubbleCenterRatio.y
+        );
+    }
+}
+
+
+@interface VMLCarPlayDragTarget : NSObject
+- (void)handlePan:(UIPanGestureRecognizer *)pan;
+@end
+
+@implementation VMLCarPlayDragTarget
+
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    VMLHandleCarPlayBubblePan(pan);
+}
+
+@end
+
+static VMLCarPlayDragTarget *gCarPlayDragTarget = nil;
+
 static void VMLCreateOrRefreshSingleOverlay(void) {
     if (!VMLIsCarPlayApp())
         return;
@@ -760,29 +975,9 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             )
         );
 
-    CGFloat x =
-        MAX(
-            8.0,
-            MIN(
-                sceneW - size - 8.0,
-                sceneW * 0.08
-            )
-        );
-
-    CGFloat y =
-        MAX(
-            8.0,
-            MIN(
-                sceneH - size - 8.0,
-                sceneH * 0.50
-            )
-        );
-
     CGRect bubbleWindowFrame =
-        CGRectMake(
-            x,
-            y,
-            size,
+        VMLCarPlayBubbleFrameForScene(
+            sceneBounds,
             size
         );
 
@@ -799,7 +994,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             UIWindowLevelAlert + 100.0;
 
         gCarPlayOverlayWindow.userInteractionEnabled =
-            NO;
+            YES;
 
         UIViewController *vc =
             [UIViewController new];
@@ -808,7 +1003,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             UIColor.clearColor;
 
         vc.view.userInteractionEnabled =
-            NO;
+            YES;
 
         gCarPlayOverlayWindow.rootViewController =
             vc;
@@ -828,15 +1023,31 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             );
 
         bubble.userInteractionEnabled =
-            NO;
+            YES;
 
         [vc.view addSubview:bubble];
+
+        if (!gCarPlayDragTarget) {
+            gCarPlayDragTarget =
+                [VMLCarPlayDragTarget new];
+        }
+
+        UIPanGestureRecognizer *pan =
+            [[UIPanGestureRecognizer alloc]
+                initWithTarget:gCarPlayDragTarget
+                        action:@selector(handlePan:)];
+
+        pan.cancelsTouchesInView =
+            YES;
+
+        [bubble addGestureRecognizer:pan];
+
 
         gCarPlayBubble =
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.4 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.5 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -875,7 +1086,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         1.0;
 
     VMLLog(
-        @"[overlay] V13.4 frame=%@ speed=%ld cpScene=%d",
+        @"[overlay] V13.5 frame=%@ speed=%ld cpScene=%d",
         NSStringFromCGRect(gCarPlayOverlayWindow.frame),
         (long)gCurrentSpeed,
         gVMLCarPlaySceneActive
@@ -912,7 +1123,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V13.4.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.5.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -928,7 +1139,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.4 SPRINGBOARD FRONTMOST FIX");
+        VMLLog(@"VML SPEED BUBBLE V13.5 PHONE HIDE + DRAG");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -952,7 +1163,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.4 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.5 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -966,7 +1177,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.4 CARPLAY ACTIVE"
+                @"V13.5 CARPLAY ACTIVE"
             );
 
             return;
