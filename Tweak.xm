@@ -46,6 +46,7 @@
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
+static BOOL gCarPlayHasEncodedSpeed = NO;
 static void VMLTrace(NSString *format, ...);
 static NSString *VMLBundle(void);
 
@@ -183,12 +184,6 @@ static void VMLUpdateBubble(UIView *bubble) {
 
     if (label) {
         label.text = VMLSpeedText();
-
-        VMLTrace(
-            @"TRACE LABEL text=%@ bundle=%@",
-            label.text ?: @"nil",
-            VMLBundle()
-        );
     }
 
     bubble.hidden = NO;
@@ -322,6 +317,8 @@ static void VMLApplyCarPlayEncodedSpeed(NSInteger speed) {
     gCurrentSpeed =
         speed;
 
+    gCarPlayHasEncodedSpeed = YES;
+
     if (gCarPlayBubble) {
         UILabel *label =
             (UILabel *)[gCarPlayBubble viewWithTag:kLabelTag];
@@ -427,6 +424,51 @@ static void VMLStartSpringBoardRebroadcast(void) {
         YES;
 
     VMLSpringBoardRebroadcastTick();
+}
+
+
+static BOOL gCarPlayReplayRequesterRunning = NO;
+
+static void VMLCarPlayReplayRequestTick(void) {
+    if (!VMLIsCarPlayApp()) {
+        gCarPlayReplayRequesterRunning =
+            NO;
+        return;
+    }
+
+    if (!gCarPlayHasEncodedSpeed) {
+        notify_post(
+            "com.sushibta.vmlspeedbubble.speed.request"
+        );
+
+        VMLTrace(
+            @"CP TRACE REPLAY REQUEST"
+        );
+    }
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            1 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLCarPlayReplayRequestTick();
+        }
+    );
+}
+
+static void VMLStartCarPlayReplayRequester(void) {
+    if (!VMLIsCarPlayApp() ||
+        gCarPlayReplayRequesterRunning) {
+
+        return;
+    }
+
+    gCarPlayReplayRequesterRunning =
+        YES;
+
+    VMLCarPlayReplayRequestTick();
 }
 
 #pragma mark - VietMap CarPlay template scene receiver
@@ -901,7 +943,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.6.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.7 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -988,7 +1030,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.6.1 BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V14.7 REPLAY HANDSHAKE");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1001,12 +1043,13 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V14.6.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.7 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
             VMLStartEncodedSpeedReceiver();
+            VMLStartCarPlayReplayRequester();
             VMLStartCarPlaySceneReceiver();
             
             VMLLog(
@@ -1017,7 +1060,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.6.1 CARPLAY ACTIVE"
+                @"V14.7 CARPLAY ACTIVE"
             );
 
             return;

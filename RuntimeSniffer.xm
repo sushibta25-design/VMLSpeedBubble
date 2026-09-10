@@ -10,6 +10,9 @@ static IMP gOrigMethodCallInit = NULL;
 static void VMLLog(NSString *format, ...);
 
 static int gPublishToken = 0;
+static void VMLPublishValidSpeed(NSInteger speed);
+static int gReplayRequestToken = 0;
+static NSInteger gLastValidSpeed = -1;
 
 static int gCarPlaySceneToken = 0;
 static BOOL gLastCarPlaySceneActive = NO;
@@ -321,6 +324,8 @@ static void VMLPublishValidSpeed(NSInteger speed) {
     if (speed <= 0 || speed > 200)
         return;
 
+    gLastValidSpeed = speed;
+
     // Keep the old fixed-name state channel for SpringBoard caching.
     if (gPublishToken == 0) {
         int token = 0;
@@ -365,6 +370,49 @@ static void VMLPublishValidSpeed(NSInteger speed) {
         (long)speed,
         encodedName
     );
+}
+
+
+static void VMLStartSpeedReplayResponder(void) {
+    if (gReplayRequestToken != 0)
+        return;
+
+    int token = 0;
+
+    uint32_t status =
+        notify_register_dispatch(
+            "com.sushibta.vmlspeedbubble.speed.request",
+            &token,
+            dispatch_get_main_queue(),
+            ^(__unused int incomingToken) {
+                if (gLastValidSpeed > 0 &&
+                    gLastValidSpeed <= 200) {
+
+                    VMLTrace(
+                        @"TRACE REPLAY REQUEST last=%ld",
+                        (long)gLastValidSpeed
+                    );
+
+                    VMLPublishValidSpeed(
+                        gLastValidSpeed
+                    );
+                } else {
+                    VMLTrace(
+                        @"TRACE REPLAY REQUEST last=none"
+                    );
+                }
+            }
+        );
+
+    if (status == NOTIFY_STATUS_OK) {
+        gReplayRequestToken =
+            token;
+
+        VMLTrace(
+            @"TRACE REPLAY RESPONDER READY token=%d",
+            token
+        );
+    }
 }
 
 static id VMLHookMethodCallInit(
@@ -534,11 +582,13 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.6.1");
+    VMLLog(@"VML RUNTIME BRIDGE V14.7");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
     VMLLog(@"========================================");
+
+    VMLStartSpeedReplayResponder();
 
     // Install immediately so we do not miss the first speed-limit event.
     VMLInstallHook();
