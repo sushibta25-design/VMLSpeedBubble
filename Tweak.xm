@@ -49,10 +49,7 @@ static NSInteger gCurrentSpeed = 0;
 static int gSpeedNotifyToken = 0;
 static int gVMLCarPlaySceneToken = 0;
 static BOOL gVMLCarPlaySceneActive = NO;
-static int gPhoneForegroundToken = 0;
-static BOOL gPhoneForeground = NO;
 
-static UIWindow *gPhoneWindow = nil;
 static UIWindow *gCarPlayOverlayWindow = nil;
 static CGPoint gCarPlayBubbleCenterRatio = {0.0, 0.0};
 static BOOL gCarPlayBubblePositionLoaded = NO;
@@ -61,7 +58,6 @@ static UIView *gCarPlayBubble = nil;
 static BOOL gOverlayLoopRunning = NO;
 static BOOL gCarPlayDragging = NO;
 
-static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
 static const NSInteger kLabelTag = 990100;
 
@@ -174,14 +170,6 @@ static void VMLUpdateBubble(UIView *bubble) {
 }
 
 static void VMLUpdateAllBubbles(void) {
-    if (gPhoneWindow) {
-        UIView *phoneBubble =
-            [gPhoneWindow viewWithTag:kPhoneBubbleTag];
-
-        if (phoneBubble) {
-            VMLUpdateBubble(phoneBubble);
-        }
-    }
 
     if (gCarPlayBubble) {
         VMLUpdateBubble(gCarPlayBubble);
@@ -337,119 +325,6 @@ static void VMLStartCarPlaySceneReceiver(void) {
         token
     );
 }
-
-
-static void VMLApplyPhoneVisibility(void) {
-    if (!gPhoneWindow)
-        return;
-
-    gPhoneWindow.hidden =
-        gPhoneForeground;
-}
-
-#pragma mark - Phone VietMap foreground receiver
-
-
-static void VMLReadPhoneForeground(void) {
-    if (gPhoneForegroundToken == 0)
-        return;
-
-    uint64_t state = 0;
-
-    if (notify_get_state(
-            gPhoneForegroundToken,
-            &state
-        ) != NOTIFY_STATUS_OK) {
-        return;
-    }
-
-    BOOL foreground =
-        (state != 0);
-
-    if (foreground != gPhoneForeground) {
-        gPhoneForeground =
-            foreground;
-
-        VMLLog(
-            @"*** PHONE VML FOREGROUND = %d ***",
-            gPhoneForeground
-        );
-    }
-
-    VMLApplyPhoneVisibility();
-}
-
-static void VMLStartPhoneForegroundReceiver(void) {
-    if (gPhoneForegroundToken != 0)
-        return;
-
-    int token = 0;
-
-    uint32_t status =
-        notify_register_dispatch(
-            "com.sushibta.vmlspeedbubble.phoneforeground",
-            &token,
-            dispatch_get_main_queue(),
-            ^(int incomingToken) {
-                gPhoneForegroundToken =
-                    incomingToken;
-
-                VMLReadPhoneForeground();
-            }
-        );
-
-    if (status != NOTIFY_STATUS_OK) {
-        VMLLog(
-            @"phoneforeground receiver failed=%u",
-            status
-        );
-        return;
-    }
-
-    gPhoneForegroundToken =
-        token;
-
-    VMLReadPhoneForeground();
-
-    VMLLog(
-        @"PHONE FOREGROUND RECEIVER ACTIVE token=%d",
-        token
-    );
-}
-
-
-#pragma mark - Phone bubble
-
-static UIWindowScene *VMLPhoneScene(void) {
-    UIApplication *app =
-        UIApplication.sharedApplication;
-
-    for (UIScene *scene in app.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class])
-            continue;
-
-        UIWindowScene *ws =
-            (UIWindowScene *)scene;
-
-        CGSize size =
-            ws.screen.bounds.size;
-
-        if (size.width <= 430.0 &&
-            size.height >= 600.0) {
-
-            return ws;
-        }
-    }
-
-    return nil;
-}
-
-static void VMLCreatePhoneBubble(void) {
-    // V13.9: phone bubble intentionally disabled.
-    // Bubble is CarPlay-only now.
-    return;
-}
-
 
 
 #pragma mark - CarPlay Scene
@@ -840,7 +715,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.9 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.9.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -921,7 +796,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.9 CARPLAY-ONLY LARGE");
+        VMLLog(@"VML SPEED BUBBLE V13.9.1 CLEAN PHONE REMOVAL");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -932,18 +807,7 @@ static void VMLStartOverlayLoop(void) {
 
             VMLStartSpeedReceiver();
 
-            dispatch_after(
-                dispatch_time(
-                    DISPATCH_TIME_NOW,
-                    2 * NSEC_PER_SEC
-                ),
-                dispatch_get_main_queue(),
-                ^{
-                    VMLCreatePhoneBubble();
-                }
-            );
-
-            VMLLog(@"V13.9 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.9.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -957,7 +821,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.9 CARPLAY ACTIVE"
+                @"V13.9.1 CARPLAY ACTIVE"
             );
 
             return;
