@@ -12,6 +12,8 @@ static int gSpeedNotifyToken = 0;
 static UIWindow *gPhoneWindow = nil;
 static __weak UIView *gNativeCarPlayHost = nil;
 static UIView *gNativeCarPlayBubble = nil;
+static UIWindow *gCarPlayOverlayWindow = nil;
+static BOOL gOverlayRetryRunning = NO;
 static __weak UIViewController *gLastNativeController = nil;
 static BOOL gNativeWatchdogRunning = NO;
 
@@ -241,6 +243,139 @@ static void VMLCreatePhoneBubble(void) {
 
     gPhoneWindow.hidden = NO;
     VMLLog(@"*** PHONE BUBBLE CREATED text=%@ ***", VMLSpeedText());
+}
+
+
+#pragma mark - Native CarPlay overlay window
+
+static BOOL VMLSceneLooksCarPlay(UIWindowScene *ws) {
+    if (!ws) return NO;
+
+    NSString *role = ws.session.role ?: @"";
+    CGSize s = ws.screen.bounds.size;
+
+    if ([role localizedCaseInsensitiveContainsString:@"CarPlay"]) {
+        return YES;
+    }
+
+    // CarPlay screens are landscape and much shorter than an iPhone portrait scene.
+    if (s.width > s.height && s.width >= 300.0 && s.height <= 500.0) {
+        return YES;
+    }
+
+    return NO;
+}
+
+static UIWindowScene *VMLFindNativeCarPlayScene(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+
+    for (UIScene *scene in app.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+        UIWindowScene *ws = (UIWindowScene *)scene;
+        if (VMLSceneLooksCarPlay(ws)) {
+            return ws;
+        }
+    }
+
+    return nil;
+}
+
+static void VMLCreateOrRefreshCarPlayOverlay(void) {
+    if (!VMLIsCarPlayApp()) return;
+
+    UIWindowScene *scene = VMLFindNativeCarPlayScene();
+    if (!scene) {
+        VMLLog(@"[overlay] no native CarPlay UIWindowScene yet");
+        return;
+    }
+
+    if (!gCarPlayOverlayWindow || gCarPlayOverlayWindow.windowScene != scene) {
+        gCarPlayOverlayWindow = [[UIWindow alloc] initWithWindowScene:scene];
+        gCarPlayOverlayWindow.backgroundColor = UIColor.clearColor;
+        gCarPlayOverlayWindow.windowLevel = UIWindowLevelAlert + 1000.0;
+        gCarPlayOverlayWindow.userInteractionEnabled = NO;
+
+        UIViewController *vc = [UIViewController new];
+        vc.view.backgroundColor = UIColor.clearColor;
+        vc.view.userInteractionEnabled = NO;
+        gCarPlayOverlayWindow.rootViewController = vc;
+
+        VMLLog(@"[overlay] created native overlay window sceneRole=%@ screen=%@",
+               scene.session.role ?: @"nil",
+               NSStringFromCGRect(scene.screen.bounds));
+    }
+
+    CGRect bounds = scene.coordinateSpace.bounds;
+    if (CGRectIsEmpty(bounds)) {
+        bounds = scene.screen.bounds;
+    }
+
+    gCarPlayOverlayWindow.frame = bounds;
+    gCarPlayOverlayWindow.hidden = NO;
+    gCarPlayOverlayWindow.alpha = 1.0;
+
+    UIView *root = gCarPlayOverlayWindow.rootViewController.view;
+    root.frame = gCarPlayOverlayWindow.bounds;
+
+    UIView *bubble = [root viewWithTag:kCarPlayBubbleTag];
+
+    if (!bubble) {
+        CGFloat W = MAX(root.bounds.size.width, 1.0);
+        CGFloat H = MAX(root.bounds.size.height, 1.0);
+
+        CGFloat size = MAX(42.0, MIN(56.0, H * 0.20));
+        bubble = VMLMakeBubble(kCarPlayBubbleTag, size);
+
+        CGFloat x = MAX(8.0, MIN(W - size - 8.0, W * 0.08));
+        CGFloat y = MAX(8.0, MIN(H - size - 8.0, H * 0.50));
+
+        bubble.frame = CGRectMake(x, y, size, size);
+        bubble.userInteractionEnabled = NO;
+        bubble.layer.zPosition = CGFLOAT_MAX;
+
+        [root addSubview:bubble];
+
+        gNativeCarPlayBubble = bubble;
+
+        VMLLog(@"*** NATIVE CARPLAY OVERLAY BUBBLE ADDED V12.2 frame=%@ windowFrame=%@ text=%@ ***",
+               NSStringFromCGRect(bubble.frame),
+               NSStringFromCGRect(gCarPlayOverlayWindow.frame),
+               VMLSpeedText());
+    } else {
+        gNativeCarPlayBubble = bubble;
+        VMLUpdateBubble(bubble);
+    }
+
+    [root bringSubviewToFront:bubble];
+}
+
+static void VMLOverlayRetryTick(void) {
+    if (!VMLIsCarPlayApp()) {
+        gOverlayRetryRunning = NO;
+        return;
+    }
+
+    VMLCreateOrRefreshCarPlayOverlay();
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+        dispatch_get_main_queue(),
+        ^{
+            VMLOverlayRetryTick();
+        }
+    );
+}
+
+static void VMLStartOverlayRetry(void) {
+    if (!VMLIsCarPlayApp() || gOverlayRetryRunning) return;
+
+    gOverlayRetryRunning = YES;
+    VMLLog(@"[overlay] V12.2 persistent overlay scanner started");
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VMLOverlayRetryTick();
+    });
 }
 
 #pragma mark - Native CarPlay host discovery
@@ -481,12 +616,12 @@ static void VMLStartNativeWatchdog(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.1 INSTANT + PERSISTENT");
+        VMLLog(@"VML SPEED BUBBLE V12.2 GLOBAL OVERLAY");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
-            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V12.1 ***");
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V12.2 ***");
             VMLStartSpeedReceiver();
 
             dispatch_after(
@@ -497,15 +632,15 @@ static void VMLStartNativeWatchdog(void) {
                 }
             );
 
-            VMLLog(@"V12.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V12.2 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
-            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V12.1 ***");
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V12.2 ***");
             VMLStartSpeedReceiver();
-            VMLStartNativeWatchdog();
-            VMLLog(@"V12.1 NATIVE CARPLAY ACTIVE");
+            VMLStartOverlayRetry();
+            VMLLog(@"V12.2 NATIVE CARPLAY OVERLAY ACTIVE");
             return;
         }
     }
