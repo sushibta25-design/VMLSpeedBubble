@@ -353,8 +353,7 @@ static void VMLPublishValidSpeed(NSInteger speed) {
             (uint64_t)speed
         );
 
-    uint32_t postStatus =
-        notify_post(
+    notify_post(
             "com.sushibta.vmlspeedbubble.speed"
         );
 }
@@ -526,7 +525,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.1.2");
+    VMLLog(@"VML RUNTIME BRIDGE V14.1.3");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
