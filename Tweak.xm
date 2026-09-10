@@ -445,57 +445,9 @@ static UIWindowScene *VMLPhoneScene(void) {
 }
 
 static void VMLCreatePhoneBubble(void) {
-    if (!VMLIsSpringBoard() || gPhoneWindow)
-        return;
-
-    UIWindowScene *scene =
-        VMLPhoneScene();
-
-    if (!scene) {
-        VMLLog(@"PHONE SCENE NOT FOUND");
-        return;
-    }
-
-    CGFloat size = 64.0;
-
-    gPhoneWindow =
-        [[UIWindow alloc] initWithWindowScene:scene];
-
-    gPhoneWindow.frame =
-        CGRectMake(18, 110, size, size);
-
-    gPhoneWindow.backgroundColor =
-        UIColor.clearColor;
-
-    gPhoneWindow.windowLevel =
-        UIWindowLevelAlert + 1000.0;
-
-    gPhoneWindow.userInteractionEnabled = NO;
-
-    UIViewController *vc =
-        [UIViewController new];
-
-    vc.view.backgroundColor =
-        UIColor.clearColor;
-
-    vc.view.userInteractionEnabled = NO;
-
-    gPhoneWindow.rootViewController = vc;
-
-    UIView *bubble =
-        VMLMakeBubble(kPhoneBubbleTag, size);
-
-    [vc.view addSubview:bubble];
-
-    gPhoneWindow.hidden = NO;
-    VMLApplyPhoneVisibility();
-
-    VMLUpdateBubble(bubble);
-
-    VMLLog(
-        @"*** PHONE BUBBLE CREATED text=%@ ***",
-        VMLSpeedText()
-    );
+    // V13.9: phone bubble intentionally disabled.
+    // Bubble is CarPlay-only now.
+    return;
 }
 
 
@@ -812,10 +764,10 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
 
     CGFloat size =
         MAX(
-            42.0,
+            84.0,
             MIN(
-                56.0,
-                sceneH * 0.20
+                112.0,
+                sceneH * 0.40
             )
         );
 
@@ -888,7 +840,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.8 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.9 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -969,12 +921,11 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.8 THREE-FIX BUILD");
+        VMLLog(@"VML SPEED BUBBLE V13.9 CARPLAY-ONLY LARGE");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
-            VMLStartPhoneForegroundReceiver();
             VMLLog(
                 @"*** SPRINGBOARD INJECTION CONFIRMED V12.6 ***"
             );
@@ -992,7 +943,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.8 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.9 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1006,7 +957,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.8 CARPLAY ACTIVE"
+                @"V13.9 CARPLAY ACTIVE"
             );
 
             return;

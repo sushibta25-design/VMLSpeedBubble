@@ -359,16 +359,45 @@ static id VMLHookMethodCallInit(
 
     NSInteger speed = -1;
 
-    // Proven VietMap source: Flutter method `updateSpeedLimit`.
-    // Do NOT scan arbitrary dictionaries/arrays; that caused random 1..199 values.
+    // Source A: proven direct Flutter event.
     if ([methodName isEqualToString:@"updateSpeedLimit"]) {
         speed =
             VMLSpeedFromObject(arguments);
     }
 
+    // Source B: proven VietMap road payload:
+    // { roadName=..., speed=..., speedLimit=50/60, ... }
+    // IMPORTANT: only exact TOP-LEVEL current-limit keys are accepted.
+    // No recursive scanning and no arbitrary numbers.
+    if ((speed <= 0 || speed > 200) &&
+        [arguments isKindOfClass:NSDictionary.class]) {
+
+        NSDictionary *dict =
+            (NSDictionary *)arguments;
+
+        id value =
+            dict[@"speedLimit"];
+
+        if (!value) {
+            value =
+                dict[@"currentSpeedLimit"];
+        }
+
+        NSInteger candidate =
+            VMLSpeedFromObject(value);
+
+        if (candidate > 0 &&
+            candidate <= 200) {
+
+            speed =
+                candidate;
+        }
+    }
+
     if (speed > 0 && speed <= 200) {
         VMLLog(
-            @"CURRENT SPEED LIMIT method=updateSpeedLimit speed=%ld",
+            @"CURRENT SPEED LIMIT method=%@ speed=%ld",
+            methodName ?: @"nil",
             (long)speed
         );
 
@@ -454,7 +483,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V13.8");
+    VMLLog(@"VML RUNTIME BRIDGE V13.9");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
