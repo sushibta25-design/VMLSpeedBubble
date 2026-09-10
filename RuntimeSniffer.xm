@@ -1,3 +1,4 @@
+#import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <notify.h>
@@ -8,6 +9,76 @@ static IMP gOrigMethodCallInit = NULL;
 static void VMLLog(NSString *format, ...);
 
 static int gPublishToken = 0;
+
+static int gPhoneForegroundToken = 0;
+
+static void VMLPublishPhoneForeground(BOOL foreground) {
+    if (gPhoneForegroundToken == 0) {
+        int token = 0;
+
+        uint32_t status =
+            notify_register_check(
+                "com.sushibta.vmlspeedbubble.phoneforeground",
+                &token
+            );
+
+        if (status != NOTIFY_STATUS_OK) {
+            VMLLog(@"phoneforeground register failed=%u", status);
+            return;
+        }
+
+        gPhoneForegroundToken = token;
+    }
+
+    notify_set_state(
+        gPhoneForegroundToken,
+        foreground ? 1 : 0
+    );
+
+    notify_post(
+        "com.sushibta.vmlspeedbubble.phoneforeground"
+    );
+
+    VMLLog(
+        @"*** VML PHONE FOREGROUND = %d ***",
+        foreground
+    );
+}
+
+static void VMLInstallPhoneForegroundObservers(void) {
+    NSNotificationCenter *nc =
+        NSNotificationCenter.defaultCenter;
+
+    [nc addObserverForName:UIApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *note) {
+        VMLPublishPhoneForeground(YES);
+    }];
+
+    [nc addObserverForName:UIApplicationWillResignActiveNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *note) {
+        VMLPublishPhoneForeground(NO);
+    }];
+
+    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(__unused NSNotification *note) {
+        VMLPublishPhoneForeground(NO);
+    }];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplicationState state =
+            UIApplication.sharedApplication.applicationState;
+
+        VMLPublishPhoneForeground(
+            state == UIApplicationStateActive
+        );
+    });
+}
 
 
 static NSString *VMLLogPath(void) {
@@ -204,9 +275,11 @@ static void VMLStart(void) {
         return;
     }
 
+    VMLInstallPhoneForegroundObservers();
+
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V12.8");
+    VMLLog(@"VML RUNTIME BRIDGE V12.9");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
