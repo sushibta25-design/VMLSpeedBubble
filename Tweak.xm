@@ -46,6 +46,7 @@
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
+static void VMLBroadcastEncodedSpeed(NSInteger speed);
 static BOOL gCarPlayHasEncodedSpeed = NO;
 static void VMLTrace(NSString *format, ...);
 static NSString *VMLBundle(void);
@@ -302,6 +303,85 @@ static void VMLStartSpeedReceiver(void) {
 
 
 
+
+#pragma mark - SpringBoard speed replay responder
+
+static int gSpringBoardReplayRequestToken = 0;
+
+static void VMLSpringBoardReplyWithCachedSpeed(void) {
+    if (!VMLIsSpringBoard())
+        return;
+
+    if (gSpeedNotifyToken == 0)
+        return;
+
+    uint64_t state = 0;
+
+    uint32_t status =
+        notify_get_state(
+            gSpeedNotifyToken,
+            &state
+        );
+
+    VMLTrace(
+        @"TRACE SB REPLAY READ token=%d status=%u state=%llu",
+        gSpeedNotifyToken,
+        status,
+        state
+    );
+
+    if (status != NOTIFY_STATUS_OK)
+        return;
+
+    NSInteger speed =
+        (NSInteger)state;
+
+    if (speed <= 0 || speed > 200)
+        return;
+
+    gCurrentSpeed =
+        speed;
+
+    VMLBroadcastEncodedSpeed(
+        speed
+    );
+
+    VMLTrace(
+        @"TRACE SB REPLAY ANSWER speed=%ld",
+        (long)speed
+    );
+}
+
+static void VMLStartSpringBoardReplayResponder(void) {
+    if (!VMLIsSpringBoard() ||
+        gSpringBoardReplayRequestToken != 0) {
+
+        return;
+    }
+
+    int token = 0;
+
+    uint32_t status =
+        notify_register_dispatch(
+            "com.sushibta.vmlspeedbubble.speed.request",
+            &token,
+            dispatch_get_main_queue(),
+            ^(__unused int incomingToken) {
+                VMLSpringBoardReplyWithCachedSpeed();
+            }
+        );
+
+    if (status == NOTIFY_STATUS_OK) {
+        gSpringBoardReplayRequestToken =
+            token;
+
+        VMLTrace(
+            @"TRACE SB REPLAY RESPONDER READY token=%d",
+            token
+        );
+    }
+}
+
 #pragma mark - Encoded speed IPC
 
 static NSMutableArray *gEncodedSpeedTokens = nil;
@@ -428,6 +508,7 @@ static void VMLStartSpringBoardRebroadcast(void) {
 
 
 static BOOL gCarPlayReplayRequesterRunning = NO;
+static NSInteger gCarPlayReplayRequestCount = 0;
 
 static void VMLCarPlayReplayRequestTick(void) {
     if (!VMLIsCarPlayApp()) {
@@ -441,9 +522,16 @@ static void VMLCarPlayReplayRequestTick(void) {
             "com.sushibta.vmlspeedbubble.speed.request"
         );
 
-        VMLTrace(
-            @"CP TRACE REPLAY REQUEST"
-        );
+        gCarPlayReplayRequestCount++;
+
+        if (gCarPlayReplayRequestCount == 1 ||
+            (gCarPlayReplayRequestCount % 5) == 0) {
+
+            VMLTrace(
+                @"CP TRACE REPLAY REQUEST count=%ld",
+                (long)gCarPlayReplayRequestCount
+            );
+        }
     }
 
     dispatch_after(
@@ -943,7 +1031,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.7 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.8 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1030,7 +1118,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.7 REPLAY HANDSHAKE");
+        VMLLog(@"VML SPEED BUBBLE V14.8 SPRINGBOARD REPLAY");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1040,10 +1128,11 @@ static void VMLStartOverlayLoop(void) {
             );
 
             VMLStartSpeedReceiver();
+            VMLStartSpringBoardReplayResponder();
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V14.7 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.8 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1060,7 +1149,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.7 CARPLAY ACTIVE"
+                @"V14.8 CARPLAY ACTIVE"
             );
 
             return;
