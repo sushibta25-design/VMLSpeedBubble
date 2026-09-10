@@ -13,6 +13,7 @@ static int gPublishToken = 0;
 static void VMLPublishValidSpeed(NSInteger speed);
 static int gReplayRequestToken = 0;
 static NSInteger gLastValidSpeed = -1;
+static uint64_t gPublisherSequence = 0;
 
 static int gCarPlaySceneToken = 0;
 static BOOL gLastCarPlaySceneActive = NO;
@@ -321,12 +322,29 @@ static NSInteger VMLSpeedFromObject(id obj) {
 
 
 static void VMLPublishValidSpeed(NSInteger speed) {
-    if (speed <= 0 || speed > 200)
+    if (speed <= 0 || speed > 200) {
+        VMLTrace(
+            @"PUB DROP invalid=%ld",
+            (long)speed
+        );
         return;
+    }
 
-    gLastValidSpeed = speed;
+    gLastValidSpeed =
+        speed;
 
-    // Keep the old fixed-name state channel for SpringBoard caching.
+    gPublisherSequence++;
+
+    uint64_t seq =
+        gPublisherSequence;
+
+    VMLTrace(
+        @"PUB BEGIN seq=%llu speed=%ld",
+        seq,
+        (long)speed
+    );
+
+    // Keep the fixed-name state path for diagnostics / SpringBoard fallback.
     if (gPublishToken == 0) {
         int token = 0;
 
@@ -335,6 +353,13 @@ static void VMLPublishValidSpeed(NSInteger speed) {
                 "com.sushibta.vmlspeedbubble.speed",
                 &token
             );
+
+        VMLTrace(
+            @"PUB REGISTER seq=%llu status=%u token=%d",
+            seq,
+            status,
+            token
+        );
 
         if (status == NOTIFY_STATUS_OK) {
             gPublishToken =
@@ -348,27 +373,71 @@ static void VMLPublishValidSpeed(NSInteger speed) {
             (uint64_t)speed
         );
 
+        VMLTrace(
+            @"PUB FIXED STATE seq=%llu token=%d speed=%ld",
+            seq,
+            gPublishToken,
+            (long)speed
+        );
+
         notify_post(
             "com.sushibta.vmlspeedbubble.speed"
         );
+
+        VMLTrace(
+            @"PUB FIXED POST seq=%llu",
+            seq
+        );
+    } else {
+        VMLTrace(
+            @"PUB FIXED SKIP seq=%llu token=0",
+            seq
+        );
     }
 
-    // V14.6 primary live transport:
-    // encode the speed in the Darwin notification NAME itself.
-    // This avoids notify state visibility differences between processes.
     NSString *encodedName =
         [NSString stringWithFormat:
             @"com.sushibta.vmlspeedbubble.speed.%ld",
             (long)speed];
 
-    notify_post(
-        encodedName.UTF8String
-    );
+    const char *encodedCString =
+        encodedName.UTF8String;
 
     VMLTrace(
-        @"TRACE ENCODED PUBLISH speed=%ld name=%@",
-        (long)speed,
-        encodedName
+        @"PUB ENCODED BEFORE seq=%llu name=%@ cstr=%p",
+        seq,
+        encodedName,
+        encodedCString
+    );
+
+    if (encodedCString) {
+        notify_post(
+            encodedCString
+        );
+
+        // Send the exact same encoded event a second time immediately.
+        // This is intentional in the diagnostic build to rule out a missed single post.
+        notify_post(
+            encodedCString
+        );
+
+        VMLTrace(
+            @"PUB ENCODED AFTER seq=%llu name=%@",
+            seq,
+            encodedName
+        );
+    } else {
+        VMLTrace(
+            @"PUB ENCODED FAIL seq=%llu utf8=nil name=%@",
+            seq,
+            encodedName
+        );
+    }
+
+    VMLTrace(
+        @"PUB END seq=%llu speed=%ld",
+        seq,
+        (long)speed
     );
 }
 
@@ -389,7 +458,7 @@ static void VMLStartSpeedReplayResponder(void) {
                     gLastValidSpeed <= 200) {
 
                     VMLTrace(
-                        @"TRACE REPLAY REQUEST last=%ld",
+                        @"REPLAY REQUEST last=%ld",
                         (long)gLastValidSpeed
                     );
 
@@ -398,7 +467,7 @@ static void VMLStartSpeedReplayResponder(void) {
                     );
                 } else {
                     VMLTrace(
-                        @"TRACE REPLAY REQUEST last=none"
+                        @"REPLAY REQUEST last=none"
                     );
                 }
             }
@@ -409,7 +478,7 @@ static void VMLStartSpeedReplayResponder(void) {
             token;
 
         VMLTrace(
-            @"TRACE REPLAY RESPONDER READY token=%d",
+            @"REPLAY RESPONDER READY token=%d",
             token
         );
     }
@@ -460,8 +529,19 @@ static id VMLHookMethodCallInit(
 
 // Source A: proven direct Flutter event.
     if ([methodName isEqualToString:@"updateSpeedLimit"]) {
+        VMLTrace(
+            @"HOOK updateSpeedLimit argsClass=%@ args=%@",
+            arguments ? NSStringFromClass([arguments class]) : @"nil",
+            arguments ?: @"nil"
+        );
+
         speed =
             VMLSpeedFromObject(arguments);
+
+        VMLTrace(
+            @"HOOK parsed speed=%ld",
+            (long)speed
+        );
     }
 
     // Source B: proven VietMap road payload:
@@ -565,6 +645,12 @@ static void VMLDyldImageAdded(
 }
 
 static void VMLStart(void) {
+    VMLTrace(
+        @"PUB START bundle=%@ process=%@",
+        NSBundle.mainBundle.bundleIdentifier ?: @"nil",
+        NSProcessInfo.processInfo.processName ?: @"nil"
+    );
+
     NSString *bundle =
         NSBundle.mainBundle.bundleIdentifier ?: @"";
 
@@ -582,7 +668,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.9");
+    VMLLog(@"VML RUNTIME BRIDGE V15.0");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());

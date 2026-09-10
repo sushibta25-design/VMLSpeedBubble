@@ -338,12 +338,14 @@ static void VMLSpringBoardReplyWithCachedSpeed(void) {
             &state
         );
 
-    VMLTrace(
-        @"TRACE SB REPLAY FALLBACK token=%d status=%u state=%llu",
-        gSpeedNotifyToken,
-        status,
-        state
-    );
+    if (state != 0) {
+        VMLTrace(
+            @"TRACE SB REPLAY FALLBACK token=%d status=%u state=%llu",
+            gSpeedNotifyToken,
+            status,
+            state
+        );
+    }
 
     if (status != NOTIFY_STATUS_OK)
         return;
@@ -1055,7 +1057,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.9 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V15.0 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1142,7 +1144,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.9 SB ENCODED CACHE");
+        VMLLog(@"VML SPEED BUBBLE V15.0 VML PUBLISHER TRACE");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1157,7 +1159,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V14.9 SPRINGBOARD ACTIVE");
+            VMLLog(@"V15.0 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1174,7 +1176,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.9 CARPLAY ACTIVE"
+                @"V15.0 CARPLAY ACTIVE"
             );
 
             return;
