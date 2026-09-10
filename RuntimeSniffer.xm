@@ -302,34 +302,6 @@ static void VMLTrace(NSString *format, ...) {
 }
 
 
-static NSString *VMLSpeedStatePath(void) {
-    return @"/var/mobile/VMLSpeedState.dat";
-}
-
-static BOOL VMLWriteSharedSpeed(NSInteger speed) {
-    if (speed <= 0 || speed > 200)
-        return NO;
-
-    NSString *text =
-        [NSString stringWithFormat:@"%ld\n", (long)speed];
-
-    NSError *error = nil;
-
-    BOOL ok =
-        [text writeToFile:VMLSpeedStatePath()
-               atomically:YES
-                 encoding:NSUTF8StringEncoding
-                    error:&error];
-
-    VMLTrace(
-        @"TRACE FILE WRITE speed=%ld ok=%d error=%@",
-        (long)speed,
-        ok,
-        error ?: @"nil"
-    );
-
-    return ok;
-}
 
 
 
@@ -349,10 +321,6 @@ static void VMLPublishValidSpeed(NSInteger speed) {
     if (speed <= 0 || speed > 200)
         return;
 
-    if (!VMLWriteSharedSpeed(speed)) {
-        return;
-    }
-
     if (gPublishToken == 0) {
         int token = 0;
 
@@ -362,19 +330,29 @@ static void VMLPublishValidSpeed(NSInteger speed) {
                 &token
             );
 
-        if (status == NOTIFY_STATUS_OK) {
-            gPublishToken =
-                token;
+        if (status != NOTIFY_STATUS_OK) {
+            VMLTrace(
+                @"TRACE PUBLISH register failed=%u",
+                status
+            );
+            return;
         }
+
+        gPublishToken =
+            token;
     }
 
-    // Darwin notify is now only a "new value available" signal.
+    notify_set_state(
+        gPublishToken,
+        (uint64_t)speed
+    );
+
     notify_post(
         "com.sushibta.vmlspeedbubble.speed"
     );
 
     VMLTrace(
-        @"TRACE PUBLISH BELL speed=%ld token=%d",
+        @"TRACE PUBLISH STATE speed=%ld token=%d",
         (long)speed,
         gPublishToken
     );
@@ -547,7 +525,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.3.1");
+    VMLLog(@"VML RUNTIME BRIDGE V14.4");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
