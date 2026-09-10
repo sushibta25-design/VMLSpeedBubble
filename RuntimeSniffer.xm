@@ -525,7 +525,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.1.3");
+    VMLLog(@"VML RUNTIME BRIDGE V14.2");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());

@@ -207,6 +207,66 @@ static void VMLUpdateAllBubbles(void) {
     }
 }
 
+
+#pragma mark - CarPlay speed state hard refresh
+
+static void VMLCarPlayHardReadSpeed(NSString *reason) {
+    if (!VMLIsCarPlayApp())
+        return;
+
+    if (gSpeedNotifyToken == 0) {
+        VMLTrace(
+            @"CP TRACE HARDREAD reason=%@ token=0",
+            reason ?: @"nil"
+        );
+        return;
+    }
+
+    uint64_t state = 0;
+
+    uint32_t status =
+        notify_get_state(
+            gSpeedNotifyToken,
+            &state
+        );
+
+    VMLTrace(
+        @"CP TRACE HARDREAD reason=%@ token=%d status=%u state=%llu",
+        reason ?: @"nil",
+        gSpeedNotifyToken,
+        status,
+        state
+    );
+
+    if (status != NOTIFY_STATUS_OK)
+        return;
+
+    NSInteger speed =
+        (NSInteger)state;
+
+    if (speed <= 0 || speed > 200)
+        return;
+
+    gCurrentSpeed =
+        speed;
+
+    if (gCarPlayBubble) {
+        UILabel *label =
+            (UILabel *)[gCarPlayBubble viewWithTag:kLabelTag];
+
+        if (label) {
+            label.text =
+                [NSString stringWithFormat:@"%ld", (long)speed];
+
+            VMLTrace(
+                @"CP TRACE LABEL HARDSET text=%@ reason=%@",
+                label.text ?: @"nil",
+                reason ?: @"nil"
+            );
+        }
+    }
+}
+
 #pragma mark - Speed IPC
 
 static void VMLReadSpeed(void) {
@@ -266,8 +326,23 @@ static void VMLStartSpeedReceiver(void) {
             &token,
             dispatch_get_main_queue(),
             ^(int incomingToken) {
-                gSpeedNotifyToken = incomingToken;
+                gSpeedNotifyToken =
+                    incomingToken;
+
+                VMLTrace(
+                    @"CP TRACE NOTIFY CALLBACK token=%d bundle=%@",
+                    incomingToken,
+                    VMLBundle()
+                );
+
                 VMLReadSpeed();
+
+                if (VMLIsCarPlayApp()) {
+            VMLStartCarPlaySpeedFallback();
+                    VMLCarPlayHardReadSpeed(
+                        @"notify-callback"
+                    );
+                }
             }
         );
 
@@ -290,6 +365,12 @@ static void VMLStartSpeedReceiver(void) {
     // Read immediately; RuntimeSniffer no longer replaces the shared
     // state with 0, so this can return the latest valid limit at once.
     VMLReadSpeed();
+
+    if (VMLIsCarPlayApp()) {
+        VMLCarPlayHardReadSpeed(
+            @"receiver-start"
+        );
+    }
 }
 
 
@@ -765,11 +846,15 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         gCarPlayBubble =
             bubble;
 
+        VMLCarPlayHardReadSpeed(
+            @"overlay-created"
+        );
+
         ((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble =
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.1.3 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.2 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -787,6 +872,9 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         );
 
     if (gCarPlayBubble) {
+        VMLCarPlayHardReadSpeed(
+            @"overlay-refresh"
+        );
         if (!gCarPlayDragging) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
@@ -854,7 +942,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.1.3 TRACE BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V14.2 CARPLAY SPEED RECEIVER FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -865,7 +953,7 @@ static void VMLStartOverlayLoop(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V14.1.3 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.2 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -879,7 +967,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.1.3 CARPLAY ACTIVE"
+                @"V14.2 CARPLAY ACTIVE"
             );
 
             return;
