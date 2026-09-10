@@ -54,22 +54,40 @@ static BOOL VMLWriteSharedSpeedFile(NSInteger speed) {
     if (speed <= 0 || speed > 200)
         return NO;
 
+    NSString *path =
+        VMLSpeedStatePath();
+
+    NSString *dir =
+        [path stringByDeletingLastPathComponent];
+
+    NSFileManager *fm =
+        NSFileManager.defaultManager;
+
+    NSError *dirError = nil;
+
+    [fm createDirectoryAtPath:dir
+  withIntermediateDirectories:YES
+                   attributes:nil
+                        error:&dirError];
+
     NSString *text =
         [NSString stringWithFormat:@"%ld\n", (long)speed];
 
     NSError *error = nil;
 
     BOOL ok =
-        [text writeToFile:VMLSpeedStatePath()
-               atomically:YES
+        [text writeToFile:path
+               atomically:NO
                  encoding:NSUTF8StringEncoding
                     error:&error];
 
     VMLTrace(
-        @"TRACE RELAY WRITE speed=%ld ok=%d bundle=%@ error=%@",
+        @"TRACE RELAY WRITE speed=%ld ok=%d path=%@ bundle=%@ dirError=%@ error=%@",
         (long)speed,
         ok,
+        path,
         VMLBundle(),
+        dirError ?: @"nil",
         error ?: @"nil"
     );
 
@@ -284,7 +302,7 @@ static void VMLCarPlayHardReadSpeed(NSString *reason) {
 #pragma mark - Shared speed file
 
 static NSString *VMLSpeedStatePath(void) {
-    return @"/var/mobile/VMLSpeedState.dat";
+    return @"/var/tmp/VMLSpeedState.dat";
 }
 
 static NSInteger VMLReadSharedSpeedFile(void) {
@@ -339,6 +357,42 @@ static void VMLApplySharedSpeed(NSString *reason) {
     }
 
     VMLUpdateAllBubbles();
+}
+
+
+static void VMLSpringBoardPrimeSharedSpeed(void) {
+    if (!VMLIsSpringBoard())
+        return;
+
+    if (gSpeedNotifyToken == 0)
+        return;
+
+    uint64_t state = 0;
+
+    uint32_t status =
+        notify_get_state(
+            gSpeedNotifyToken,
+            &state
+        );
+
+    VMLTrace(
+        @"TRACE RELAY PRIME token=%d status=%u state=%llu",
+        gSpeedNotifyToken,
+        status,
+        state
+    );
+
+    if (status != NOTIFY_STATUS_OK)
+        return;
+
+    NSInteger speed =
+        (NSInteger)state;
+
+    if (speed > 0 && speed <= 200) {
+        VMLWriteSharedSpeedFile(
+            speed
+        );
+    }
 }
 
 #pragma mark - Speed IPC
@@ -931,7 +985,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.4.2 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.5 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1060,7 +1114,7 @@ static void VMLStartCarPlaySpeedFallback(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.4.2 BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V14.5 VAR-TMP RELAY");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1071,7 +1125,7 @@ static void VMLStartCarPlaySpeedFallback(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V14.4.2 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.5 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1086,7 +1140,7 @@ static void VMLStartCarPlaySpeedFallback(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.4.2 CARPLAY ACTIVE"
+                @"V14.5 CARPLAY ACTIVE"
             );
 
             return;
