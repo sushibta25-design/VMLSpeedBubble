@@ -1057,7 +1057,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V15.0 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V15.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1144,7 +1144,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.0 VML PUBLISHER TRACE");
+        VMLLog(@"VML SPEED BUBBLE V15.1 SPLIT INJECTION");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1159,7 +1159,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V15.0 SPRINGBOARD ACTIVE");
+            VMLLog(@"V15.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1176,7 +1176,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V15.0 CARPLAY ACTIVE"
+                @"V15.1 CARPLAY ACTIVE"
             );
 
             return;

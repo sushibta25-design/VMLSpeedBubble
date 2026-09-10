@@ -645,8 +645,16 @@ static void VMLDyldImageAdded(
 }
 
 static void VMLStart(void) {
+    NSString *bundleID =
+        NSBundle.mainBundle.bundleIdentifier ?: @"";
+
+    if (![bundleID isEqualToString:@"vn.vietmap.live"]) {
+        return;
+    }
+
+
     VMLTrace(
-        @"PUB START bundle=%@ process=%@",
+        @"VML RUNTIME START OK bundle=%@ process=%@",
         NSBundle.mainBundle.bundleIdentifier ?: @"nil",
         NSProcessInfo.processInfo.processName ?: @"nil"
     );
@@ -668,7 +676,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V15.0");
+    VMLLog(@"VML RUNTIME BRIDGE V15.1");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
