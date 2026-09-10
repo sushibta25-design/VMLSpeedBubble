@@ -240,7 +240,16 @@ static void VMLStartSpeedReceiver(void) {
 
 
 
+
 #pragma mark - Phone VietMap foreground receiver
+
+static void VMLApplyPhoneVisibility(void) {
+    if (!gPhoneWindow)
+        return;
+
+    gPhoneWindow.hidden =
+        gPhoneForeground;
+}
 
 static void VMLReadPhoneForeground(void) {
     if (gPhoneForegroundToken == 0)
@@ -255,10 +264,12 @@ static void VMLReadPhoneForeground(void) {
         return;
     }
 
-    BOOL foreground = (state != 0);
+    BOOL foreground =
+        (state != 0);
 
-    if (gPhoneForeground != foreground) {
-        gPhoneForeground = foreground;
+    if (foreground != gPhoneForeground) {
+        gPhoneForeground =
+            foreground;
 
         VMLLog(
             @"*** PHONE VML FOREGROUND = %d ***",
@@ -266,10 +277,7 @@ static void VMLReadPhoneForeground(void) {
         );
     }
 
-    if (gPhoneWindow) {
-        gPhoneWindow.hidden =
-            gPhoneForeground;
-    }
+    VMLApplyPhoneVisibility();
 }
 
 static void VMLStartPhoneForegroundReceiver(void) {
@@ -284,7 +292,9 @@ static void VMLStartPhoneForegroundReceiver(void) {
             &token,
             dispatch_get_main_queue(),
             ^(int incomingToken) {
-                gPhoneForegroundToken = incomingToken;
+                gPhoneForegroundToken =
+                    incomingToken;
+
                 VMLReadPhoneForeground();
             }
         );
@@ -297,81 +307,13 @@ static void VMLStartPhoneForegroundReceiver(void) {
         return;
     }
 
-    gPhoneForegroundToken = token;
+    gPhoneForegroundToken =
+        token;
+
     VMLReadPhoneForeground();
 
     VMLLog(
         @"PHONE FOREGROUND RECEIVER ACTIVE token=%d",
-        token
-    );
-}
-
-
-#pragma mark - VietMap CarPlay template scene receiver
-
-static void VMLReadCarPlaySceneState(void) {
-    if (gVMLCarPlaySceneToken == 0)
-        return;
-
-    uint64_t state = 0;
-
-    uint32_t status =
-        notify_get_state(
-            gVMLCarPlaySceneToken,
-            &state
-        );
-
-    if (status != NOTIFY_STATUS_OK)
-        return;
-
-    BOOL active = (state != 0);
-
-    if (active != gVMLCarPlaySceneActive) {
-        gVMLCarPlaySceneActive = active;
-
-        VMLLog(
-            @"*** VML CPTEMPLATE ACTIVE ON CARPLAY = %d ***",
-            gVMLCarPlaySceneActive
-        );
-    }
-
-    if (gCarPlayOverlayWindow) {
-        gCarPlayOverlayWindow.hidden =
-            gVMLCarPlaySceneActive;
-    }
-}
-
-static void VMLStartCarPlaySceneReceiver(void) {
-    if (gVMLCarPlaySceneToken != 0)
-        return;
-
-    int token = 0;
-
-    uint32_t status =
-        notify_register_dispatch(
-            "com.sushibta.vmlspeedbubble.vmlcarplaysceneactive",
-            &token,
-            dispatch_get_main_queue(),
-            ^(int incomingToken) {
-                gVMLCarPlaySceneToken = incomingToken;
-                VMLReadCarPlaySceneState();
-            }
-        );
-
-    if (status != NOTIFY_STATUS_OK) {
-        VMLLog(
-            @"cpscene receiver failed=%u",
-            status
-        );
-        return;
-    }
-
-    gVMLCarPlaySceneToken = token;
-
-    VMLReadCarPlaySceneState();
-
-    VMLLog(
-        @"CPTEMPLATE SCENE RECEIVER ACTIVE token=%d",
         token
     );
 }
@@ -446,6 +388,7 @@ static void VMLCreatePhoneBubble(void) {
     [vc.view addSubview:bubble];
 
     gPhoneWindow.hidden = NO;
+    VMLApplyPhoneVisibility();
 
     VMLUpdateBubble(bubble);
 
@@ -849,7 +792,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.2 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -888,7 +831,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         1.0;
 
     VMLLog(
-        @"[overlay] V13.1 frame=%@ speed=%ld activeVMLExact=%d",
+        @"[overlay] V13.2 frame=%@ speed=%ld activeVMLExact=%d",
         NSStringFromCGRect(
             gCarPlayOverlayWindow.frame
         ),
@@ -927,7 +870,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V13.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.2 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -943,7 +886,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.1 CPTEMPLATE SCENE DETECTOR");
+        VMLLog(@"VML SPEED BUBBLE V13.2 PHONE+CARPLAY SPLIT");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -966,7 +909,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.2 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -980,7 +923,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.1 CARPLAY ACTIVE"
+                @"V13.2 CARPLAY ACTIVE"
             );
 
             return;

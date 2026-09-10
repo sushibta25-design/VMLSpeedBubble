@@ -376,9 +376,10 @@ static void VMLStart(void) {
         return;
     }
 
+    VMLInstallPhoneForegroundObservers();
     VMLStartCarPlayTemplateSceneWatcher();
 
-    VMLInstallPhoneForegroundObservers();
+
 
 
     VMLLog(@"========================================");
