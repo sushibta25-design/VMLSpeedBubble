@@ -350,6 +350,7 @@ static void VMLReadPhoneForeground(void) {
         );
     }
 
+    VMLRefreshPhoneFrontmostState();
     VMLApplyPhoneVisibility();
 }
 
@@ -388,6 +389,187 @@ static void VMLStartPhoneForegroundReceiver(void) {
     VMLLog(
         @"PHONE FOREGROUND RECEIVER ACTIVE token=%d",
         token
+    );
+}
+
+
+#pragma mark - Direct SpringBoard frontmost-app detector
+
+static id VMLCallObjectNoArg(id obj, NSString *selectorName) {
+    if (!obj || !selectorName.length)
+        return nil;
+
+    SEL sel = NSSelectorFromString(selectorName);
+
+    if (![obj respondsToSelector:sel])
+        return nil;
+
+    id value = nil;
+
+    @try {
+        value =
+            ((id (*)(id, SEL))objc_msgSend)(
+                obj,
+                sel
+            );
+    } @catch (__unused NSException *e) {
+        value = nil;
+    }
+
+    return value;
+}
+
+static NSString *VMLBundleIDFromObject(id obj) {
+    if (!obj)
+        return nil;
+
+    NSArray<NSString *> *selectors =
+        @[
+            @"bundleIdentifier",
+            @"applicationBundleIdentifier",
+            @"displayIdentifier"
+        ];
+
+    for (NSString *name in selectors) {
+        id value =
+            VMLCallObjectNoArg(
+                obj,
+                name
+            );
+
+        if ([value isKindOfClass:NSString.class] &&
+            [(NSString *)value length] > 0) {
+
+            return (NSString *)value;
+        }
+    }
+
+    return nil;
+}
+
+static id VMLSharedInstanceForClassName(
+    NSString *className
+) {
+    Class cls =
+        NSClassFromString(className);
+
+    if (!cls)
+        return nil;
+
+    NSArray<NSString *> *selectors =
+        @[
+            @"sharedInstance",
+            @"sharedWorkspace",
+            @"sharedApplicationController"
+        ];
+
+    for (NSString *name in selectors) {
+        id value =
+            VMLCallObjectNoArg(
+                cls,
+                name
+            );
+
+        if (value)
+            return value;
+    }
+
+    return nil;
+}
+
+static NSString *VMLSpringBoardFrontmostBundle(void) {
+    // Try several known SpringBoard/workspace surfaces dynamically.
+    // No private headers are required and unavailable selectors are skipped.
+    NSArray<NSString *> *classNames =
+        @[
+            @"SBMainWorkspace",
+            @"SBApplicationController",
+            @"UIApplication"
+        ];
+
+    NSArray<NSString *> *frontSelectors =
+        @[
+            @"frontmostApplication",
+            @"_accessibilityFrontMostApplication",
+            @"focusedApplication",
+            @"currentApplication"
+        ];
+
+    for (NSString *className in classNames) {
+        id host = nil;
+
+        if ([className isEqualToString:@"UIApplication"]) {
+            host =
+                UIApplication.sharedApplication;
+        } else {
+            host =
+                VMLSharedInstanceForClassName(
+                    className
+                );
+        }
+
+        if (!host)
+            continue;
+
+        for (NSString *selectorName in frontSelectors) {
+            id app =
+                VMLCallObjectNoArg(
+                    host,
+                    selectorName
+                );
+
+            NSString *bundle =
+                VMLBundleIDFromObject(app);
+
+            if (bundle.length > 0)
+                return bundle;
+        }
+    }
+
+    return nil;
+}
+
+static void VMLRefreshPhoneFrontmostState(void) {
+    if (!VMLIsSpringBoard())
+        return;
+
+    NSString *bundle =
+        VMLSpringBoardFrontmostBundle();
+
+    if (bundle.length > 0) {
+        BOOL isVML =
+            [bundle isEqualToString:@"vn.vietmap.live"];
+
+        if (isVML != gPhoneForeground) {
+            gPhoneForeground =
+                isVML;
+
+            VMLLog(
+                @"*** SPRINGBOARD FRONTMOST VML = %d bundle=%@ ***",
+                gPhoneForeground,
+                bundle
+            );
+        }
+    }
+
+    VMLApplyPhoneVisibility();
+}
+
+static void VMLStartPhoneFrontmostWatchdog(void) {
+    if (!VMLIsSpringBoard())
+        return;
+
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            [NSTimer scheduledTimerWithTimeInterval:0.20
+                                            repeats:YES
+                                              block:^(__unused NSTimer *timer) {
+                VMLRefreshPhoneFrontmostState();
+            }];
+
+            VMLRefreshPhoneFrontmostState();
+        }
     );
 }
 
@@ -654,7 +836,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.3 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.4 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -693,7 +875,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         1.0;
 
     VMLLog(
-        @"[overlay] V13.3 frame=%@ speed=%ld cpScene=%d",
+        @"[overlay] V13.4 frame=%@ speed=%ld cpScene=%d",
         NSStringFromCGRect(gCarPlayOverlayWindow.frame),
         (long)gCurrentSpeed,
         gVMLCarPlaySceneActive
@@ -730,7 +912,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V13.3.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.4.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -746,11 +928,12 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.3 PHONE-SCENE FIX");
+        VMLLog(@"VML SPEED BUBBLE V13.4 SPRINGBOARD FRONTMOST FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
+            VMLStartPhoneFrontmostWatchdog();
             VMLStartPhoneForegroundReceiver();
             VMLLog(
                 @"*** SPRINGBOARD INJECTION CONFIRMED V12.6 ***"
@@ -769,7 +952,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.3 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.4 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -783,7 +966,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.3 CARPLAY ACTIVE"
+                @"V13.4 CARPLAY ACTIVE"
             );
 
             return;
