@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <notify.h>
+#import <objc/message.h>
 
 
 @interface VMLPassthroughWindow : UIWindow
@@ -20,14 +21,14 @@
 
 static NSInteger gCurrentSpeed = 0;
 static int gSpeedNotifyToken = 0;
-static int gVMLCarPlayVisibleToken = 0;
-static BOOL gVMLCarPlayVisible = NO;
 
 static UIWindow *gPhoneWindow = nil;
 static UIWindow *gCarPlayOverlayWindow = nil;
 static UIView *gCarPlayBubble = nil;
 
 static BOOL gOverlayLoopRunning = NO;
+static BOOL gCarPlayShowsVietMap = NO;
+static NSString *gLastForegroundEvidence = nil;
 
 static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
@@ -234,67 +235,6 @@ static void VMLStartSpeedReceiver(void) {
 
 
 
-#pragma mark - VietMap-on-CarPlay visibility receiver
-
-static void VMLReadCarPlayVisibleState(void) {
-    if (gVMLCarPlayVisibleToken == 0)
-        return;
-
-    uint64_t state = 0;
-
-    if (notify_get_state(
-            gVMLCarPlayVisibleToken,
-            &state
-        ) != NOTIFY_STATUS_OK) {
-        return;
-    }
-
-    BOOL visible = (state != 0);
-
-    if (visible != gVMLCarPlayVisible) {
-        gVMLCarPlayVisible = visible;
-
-        VMLLog(
-            @"*** VML ON CARPLAY = %d ***",
-            gVMLCarPlayVisible
-        );
-    }
-}
-
-static void VMLStartCarPlayVisibleReceiver(void) {
-    if (gVMLCarPlayVisibleToken != 0)
-        return;
-
-    int token = 0;
-
-    uint32_t status =
-        notify_register_dispatch(
-            "com.sushibta.vmlspeedbubble.vmlcarplayvisible",
-            &token,
-            dispatch_get_main_queue(),
-            ^(int incomingToken) {
-                gVMLCarPlayVisibleToken = incomingToken;
-                VMLReadCarPlayVisibleState();
-            }
-        );
-
-    if (status != NOTIFY_STATUS_OK) {
-        VMLLog(
-            @"carplay-visible receiver failed=%u",
-            status
-        );
-        return;
-    }
-
-    gVMLCarPlayVisibleToken = token;
-    VMLReadCarPlayVisibleState();
-
-    VMLLog(
-        @"CARPLAY VML VISIBILITY RECEIVER ACTIVE token=%d",
-        token
-    );
-}
-
 #pragma mark - Phone bubble
 
 static UIWindowScene *VMLPhoneScene(void) {
@@ -374,6 +314,191 @@ static void VMLCreatePhoneBubble(void) {
     );
 }
 
+
+#pragma mark - Active CarPlay app detector
+
+static BOOL VMLStringLooksLikeVietMap(NSString *s) {
+    if (!s.length) return NO;
+
+    NSString *lower = s.lowercaseString;
+
+    return [lower containsString:@"vn.vietmap.live"] ||
+           [lower containsString:@"vietmaplive"] ||
+           [lower containsString:@"vietmap live"];
+}
+
+static id VMLSafeObjectSelector(id obj, NSString *selectorName) {
+    if (!obj || !selectorName.length) return nil;
+
+    SEL sel = NSSelectorFromString(selectorName);
+    if (![obj respondsToSelector:sel]) return nil;
+
+    return ((id (*)(id, SEL))objc_msgSend)(obj, sel);
+}
+
+static BOOL VMLObjectContainsVietMapEvidence(id obj, NSInteger depth) {
+    if (!obj || depth > 2) return NO;
+
+    NSString *desc = nil;
+
+    @try {
+        desc = [obj description];
+    } @catch (__unused NSException *e) {
+        desc = nil;
+    }
+
+    if (VMLStringLooksLikeVietMap(desc)) {
+        gLastForegroundEvidence = desc;
+        return YES;
+    }
+
+    NSArray<NSString *> *stringSelectors = @[
+        @"bundleIdentifier",
+        @"applicationBundleIdentifier",
+        @"clientBundleIdentifier",
+        @"appBundleIdentifier",
+        @"identifier",
+        @"sceneIdentifier",
+        @"displayIdentifier"
+    ];
+
+    for (NSString *name in stringSelectors) {
+        id value = nil;
+
+        @try {
+            value = VMLSafeObjectSelector(obj, name);
+        } @catch (__unused NSException *e) {
+            value = nil;
+        }
+
+        if ([value isKindOfClass:NSString.class] &&
+            VMLStringLooksLikeVietMap((NSString *)value)) {
+
+            gLastForegroundEvidence =
+                [NSString stringWithFormat:@"%@=%@", name, value];
+
+            return YES;
+        }
+    }
+
+    NSArray<NSString *> *objectSelectors = @[
+        @"application",
+        @"representedApplication",
+        @"clientApplication",
+        @"scene",
+        @"sceneIdentity",
+        @"identity",
+        @"host",
+        @"contentViewController",
+        @"presentedViewController",
+        @"selectedViewController",
+        @"topViewController"
+    ];
+
+    for (NSString *name in objectSelectors) {
+        id value = nil;
+
+        @try {
+            value = VMLSafeObjectSelector(obj, name);
+        } @catch (__unused NSException *e) {
+            value = nil;
+        }
+
+        if (value &&
+            value != obj &&
+            VMLObjectContainsVietMapEvidence(value, depth + 1)) {
+
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
+static BOOL VMLViewTreeContainsVietMap(UIView *view, NSInteger depth) {
+    if (!view || depth > 8) return NO;
+
+    if (VMLObjectContainsVietMapEvidence(view, 0))
+        return YES;
+
+    for (UIView *child in view.subviews) {
+        if (VMLViewTreeContainsVietMap(child, depth + 1))
+            return YES;
+    }
+
+    return NO;
+}
+
+static BOOL VMLControllerTreeContainsVietMap(UIViewController *vc, NSInteger depth) {
+    if (!vc || depth > 10) return NO;
+
+    if (VMLObjectContainsVietMapEvidence(vc, 0))
+        return YES;
+
+    if (vc.view && VMLViewTreeContainsVietMap(vc.view, 0))
+        return YES;
+
+    if (vc.presentedViewController &&
+        VMLControllerTreeContainsVietMap(vc.presentedViewController, depth + 1)) {
+
+        return YES;
+    }
+
+    for (UIViewController *child in vc.childViewControllers) {
+        if (VMLControllerTreeContainsVietMap(child, depth + 1))
+            return YES;
+    }
+
+    return NO;
+}
+
+static BOOL VMLDetectVietMapOnCarPlay(void) {
+    if (!VMLIsCarPlayApp()) return NO;
+
+    gLastForegroundEvidence = nil;
+
+    UIApplication *app = UIApplication.sharedApplication;
+
+    for (UIScene *scene in app.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class])
+            continue;
+
+        UIWindowScene *ws = (UIWindowScene *)scene;
+
+        for (UIWindow *window in ws.windows) {
+            if (window.hidden || window.alpha <= 0.01)
+                continue;
+
+            UIViewController *root = window.rootViewController;
+
+            if (root &&
+                VMLControllerTreeContainsVietMap(root, 0)) {
+
+                return YES;
+            }
+
+            if (VMLObjectContainsVietMapEvidence(window, 0))
+                return YES;
+        }
+    }
+
+    return NO;
+}
+
+static void VMLRefreshActiveCarPlayApp(void) {
+    BOOL now = VMLDetectVietMapOnCarPlay();
+
+    if (now != gCarPlayShowsVietMap) {
+        gCarPlayShowsVietMap = now;
+
+        VMLLog(
+            @"*** ACTIVE CARPLAY VIETMAP = %d evidence=%@ ***",
+            gCarPlayShowsVietMap,
+            gLastForegroundEvidence ?: @"none"
+        );
+    }
+}
+
 #pragma mark - CarPlay Scene
 
 static BOOL VMLSceneLooksCarPlay(UIWindowScene *scene) {
@@ -444,6 +569,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
 
     // Pull the latest shared valid speed every tick.
     VMLReadSpeed();
+    VMLRefreshActiveCarPlayApp();
 
     UIWindowScene *scene =
         VMLFindCarPlayScene();
@@ -554,7 +680,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V12.7 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V12.8 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -588,18 +714,18 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     // Hide ONLY when VietMap itself owns a visible CarPlay-sized scene.
     // Opening VietMap on the iPhone screen alone does not satisfy this.
     gCarPlayOverlayWindow.hidden =
-        gVMLCarPlayVisible;
+        gCarPlayShowsVietMap;
 
     gCarPlayOverlayWindow.alpha =
         1.0;
 
     VMLLog(
-        @"[overlay] V12.7 frame=%@ speed=%ld vmlCarPlay=%d",
+        @"[overlay] V12.8 frame=%@ speed=%ld activeVML=%d",
         NSStringFromCGRect(
             gCarPlayOverlayWindow.frame
         ),
         (long)gCurrentSpeed,
-        gVMLCarPlayVisible
+        gCarPlayShowsVietMap
     );
 }
 
@@ -633,7 +759,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V12.7 CARPLAY-AWARE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V12.8 ACTIVE-APP SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -649,7 +775,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.7 CARPLAY-AWARE GLOBAL OVERLAY");
+        VMLLog(@"VML SPEED BUBBLE V12.8 ACTIVE-APP GLOBAL OVERLAY");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -671,12 +797,11 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V12.7 SPRINGBOARD ACTIVE");
+            VMLLog(@"V12.8 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
-            VMLStartCarPlayVisibleReceiver();
             VMLLog(
                 @"*** CARPLAY.APP INJECTION CONFIRMED V12.6 ***"
             );
@@ -685,7 +810,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V12.7 CARPLAY ACTIVE"
+                @"V12.8 CARPLAY ACTIVE"
             );
 
             return;
