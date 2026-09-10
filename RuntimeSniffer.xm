@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <notify.h>
+#import <mach-o/dyld.h>
 
 
 
@@ -40,13 +41,6 @@ static BOOL VMLCarPlayTemplateSceneIsForeground(void) {
             continue;
 
         UISceneActivationState state = scene.activationState;
-
-        VMLLog(
-            @"[cpscene] class=%@ role=%@ activation=%ld",
-            NSStringFromClass(scene.class),
-            scene.session.role ?: @"nil",
-            (long)state
-        );
 
         if (state == UISceneActivationStateForegroundActive)
             return YES;
@@ -142,14 +136,6 @@ static BOOL VMLPhoneSceneIsForeground(void) {
 
         BOOL active =
             (ws.activationState == UISceneActivationStateForegroundActive);
-
-        VMLLog(
-            @"[phonescene] class=%@ size=%@ activation=%ld active=%d",
-            NSStringFromClass(ws.class),
-            NSStringFromCGSize(ws.screen.bounds.size),
-            (long)ws.activationState,
-            active
-        );
 
         if (active)
             return YES;
@@ -274,6 +260,75 @@ static NSInteger VMLSpeedFromObject(id obj) {
     return -1;
 }
 
+static NSInteger VMLCurrentSpeedLimitFromArguments(id arguments) {
+    if (!arguments)
+        return -1;
+
+    // Direct updateSpeedLimit payload.
+    NSInteger direct =
+        VMLSpeedFromObject(arguments);
+
+    if (direct > 0 && direct <= 200)
+        return direct;
+
+    if ([arguments isKindOfClass:NSDictionary.class]) {
+        NSDictionary *dict =
+            (NSDictionary *)arguments;
+
+        // Only current-limit keys. Deliberately ignore nextSpeedLimit.
+        NSArray<NSString *> *keys =
+            @[
+                @"speedLimit",
+                @"currentSpeedLimit",
+                @"current_speed_limit"
+            ];
+
+        for (NSString *key in keys) {
+            id value =
+                dict[key];
+
+            NSInteger speed =
+                VMLSpeedFromObject(value);
+
+            if (speed > 0 && speed <= 200)
+                return speed;
+        }
+
+        // Some Flutter payloads wrap the road data one level deeper.
+        NSArray<NSString *> *containers =
+            @[
+                @"data",
+                @"arguments",
+                @"payload",
+                @"road",
+                @"currentRoad"
+            ];
+
+        for (NSString *key in containers) {
+            id nested =
+                dict[key];
+
+            NSInteger speed =
+                VMLCurrentSpeedLimitFromArguments(nested);
+
+            if (speed > 0 && speed <= 200)
+                return speed;
+        }
+    }
+
+    if ([arguments isKindOfClass:NSArray.class]) {
+        for (id item in (NSArray *)arguments) {
+            NSInteger speed =
+                VMLCurrentSpeedLimitFromArguments(item);
+
+            if (speed > 0 && speed <= 200)
+                return speed;
+        }
+    }
+
+    return -1;
+}
+
 static void VMLPublishValidSpeed(NSInteger speed) {
     // V12.3: 0 means "no fresh value". Never overwrite the last valid
     // notify state with 0, so CarPlay can read the latest known limit instantly.
@@ -340,13 +395,21 @@ static id VMLHookMethodCallInit(
             );
     }
 
-    if ([methodName isEqualToString:@"updateSpeedLimit"]) {
-        NSInteger speed =
-            VMLSpeedFromObject(arguments);
+    NSInteger speed = -1;
 
+    if ([methodName isEqualToString:@"updateSpeedLimit"]) {
+        speed =
+            VMLCurrentSpeedLimitFromArguments(arguments);
+    } else if ([arguments isKindOfClass:NSDictionary.class] ||
+               [arguments isKindOfClass:NSArray.class]) {
+        speed =
+            VMLCurrentSpeedLimitFromArguments(arguments);
+    }
+
+    if (speed > 0 && speed <= 200) {
         VMLLog(
-            @"updateSpeedLimit arguments=%@ parsed=%ld",
-            arguments,
+            @"CURRENT SPEED LIMIT method=%@ speed=%ld",
+            methodName ?: @"nil",
             (long)speed
         );
 
@@ -398,6 +461,22 @@ static void VMLInstallHook(void) {
     );
 }
 
+
+static void VMLDyldImageAdded(
+    const struct mach_header *mh,
+    intptr_t slide
+) {
+    (void)mh;
+    (void)slide;
+
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            VMLInstallHook();
+        }
+    );
+}
+
 static void VMLStart(void) {
     NSString *bundle =
         NSBundle.mainBundle.bundleIdentifier ?: @"";
@@ -416,47 +495,37 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V12.9");
+    VMLLog(@"VML RUNTIME BRIDGE V13.7");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
     VMLLog(@"========================================");
 
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            1 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLLog(@"INSTALL +1");
-            VMLInstallHook();
-        }
+    // Install immediately so we do not miss the first speed-limit event.
+    VMLInstallHook();
+
+    _dyld_register_func_for_add_image(
+        VMLDyldImageAdded
     );
 
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            4 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLLog(@"INSTALL +4");
-            VMLInstallHook();
-        }
-    );
+    NSArray<NSNumber *> *delays =
+        @[@0.10, @0.30, @0.75, @1.50, @3.00];
 
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            8 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLLog(@"INSTALL +8");
-            VMLInstallHook();
-        }
-    );
+    for (NSNumber *delay in delays) {
+        dispatch_after(
+            dispatch_time(
+                DISPATCH_TIME_NOW,
+                (int64_t)(
+                    delay.doubleValue *
+                    NSEC_PER_SEC
+                )
+            ),
+            dispatch_get_main_queue(),
+            ^{
+                VMLInstallHook();
+            }
+        );
+    }
 }
 
 %ctor {

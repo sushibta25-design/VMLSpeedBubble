@@ -36,6 +36,7 @@ static BOOL gCarPlayBubblePositionLoaded = NO;
 static UIView *gCarPlayBubble = nil;
 
 static BOOL gOverlayLoopRunning = NO;
+static BOOL gCarPlayDragging = NO;
 
 static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
@@ -182,11 +183,6 @@ static void VMLReadSpeed(void) {
 
     // V12.3: only a valid limit can replace the current displayed value.
     if (speed <= 0 || speed > 200) {
-        VMLLog(
-            @"[speed] state=%ld -> keep current=%ld",
-            (long)speed,
-            (long)gCurrentSpeed
-        );
         return;
     }
 
@@ -642,6 +638,10 @@ static void VMLHandleCarPlayBubblePan(
         return;
     }
 
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        gCarPlayDragging = YES;
+    }
+
     UIWindowScene *scene =
         gCarPlayOverlayWindow.windowScene;
 
@@ -718,6 +718,7 @@ static void VMLHandleCarPlayBubblePan(
         UIGestureRecognizerStateCancelled) {
 
         VMLSaveCarPlayBubblePosition();
+        gCarPlayDragging = NO;
 
         VMLLog(
             @"*** CARPLAY BUBBLE MOVED x=%.3f y=%.3f ***",
@@ -852,14 +853,16 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.6.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.7 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
     }
 
-    gCarPlayOverlayWindow.frame =
-        bubbleWindowFrame;
+    if (!gCarPlayDragging) {
+        gCarPlayOverlayWindow.frame =
+            bubbleWindowFrame;
+    }
 
     gCarPlayOverlayWindow.rootViewController.view.frame =
         CGRectMake(
@@ -889,13 +892,6 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
 
     gCarPlayOverlayWindow.alpha =
         1.0;
-
-    VMLLog(
-        @"[overlay] V13.6.1 frame=%@ speed=%ld cpScene=%d",
-        NSStringFromCGRect(gCarPlayOverlayWindow.frame),
-        (long)gCurrentSpeed,
-        gVMLCarPlaySceneActive
-    );
 }
 
 static void VMLOverlayTick(void) {
@@ -909,7 +905,7 @@ static void VMLOverlayTick(void) {
     dispatch_after(
         dispatch_time(
             DISPATCH_TIME_NOW,
-            250 * NSEC_PER_MSEC
+            500 * NSEC_PER_MSEC
         ),
         dispatch_get_main_queue(),
         ^{
@@ -927,10 +923,6 @@ static void VMLStartOverlayLoop(void) {
 
     gOverlayLoopRunning = YES;
 
-    VMLLog(
-        @"[overlay] V13.6.1.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
-    );
-
     dispatch_async(
         dispatch_get_main_queue(),
         ^{
@@ -944,7 +936,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.6.1 SAFE BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V13.7 FAST SYNC + SMOOTH DRAG");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -967,7 +959,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.6.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.7 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -981,7 +973,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.6.1 CARPLAY ACTIVE"
+                @"V13.7 CARPLAY ACTIVE"
             );
 
             return;
