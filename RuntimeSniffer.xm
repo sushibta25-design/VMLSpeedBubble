@@ -302,6 +302,37 @@ static void VMLTrace(NSString *format, ...) {
 }
 
 
+static NSString *VMLSpeedStatePath(void) {
+    return @"/var/mobile/VMLSpeedState.dat";
+}
+
+static BOOL VMLWriteSharedSpeed(NSInteger speed) {
+    if (speed <= 0 || speed > 200)
+        return NO;
+
+    NSString *text =
+        [NSString stringWithFormat:@"%ld\n", (long)speed];
+
+    NSError *error = nil;
+
+    BOOL ok =
+        [text writeToFile:VMLSpeedStatePath()
+               atomically:YES
+                 encoding:NSUTF8StringEncoding
+                    error:&error];
+
+    VMLTrace(
+        @"TRACE FILE WRITE speed=%ld ok=%d error=%@",
+        (long)speed,
+        ok,
+        error ?: @"nil"
+    );
+
+    return ok;
+}
+
+
+
 static NSInteger VMLSpeedFromObject(id obj) {
     if (!obj)
         return -1;
@@ -315,10 +346,10 @@ static NSInteger VMLSpeedFromObject(id obj) {
 
 
 static void VMLPublishValidSpeed(NSInteger speed) {
-    // V12.3: 0 means "no fresh value". Never overwrite the last valid
-    // notify state with 0, so CarPlay can read the latest known limit instantly.
-    if (speed <= 0 || speed > 200) {
-        VMLLog(@"KEEP LAST VALID - ignore publish speed=%ld", (long)speed);
+    if (speed <= 0 || speed > 200)
+        return;
+
+    if (!VMLWriteSharedSpeed(speed)) {
         return;
     }
 
@@ -331,31 +362,22 @@ static void VMLPublishValidSpeed(NSInteger speed) {
                 &token
             );
 
-        if (status != NOTIFY_STATUS_OK) {
-            VMLLog(
-                @"notify_register_check failed=%u",
-                status
-            );
-            return;
+        if (status == NOTIFY_STATUS_OK) {
+            gPublishToken =
+                token;
         }
-
-        gPublishToken = token;
     }
 
+    // Darwin notify is now only a "new value available" signal.
+    notify_post(
+        "com.sushibta.vmlspeedbubble.speed"
+    );
+
     VMLTrace(
-        @"TRACE PUBLISH speed=%ld token=%d",
+        @"TRACE PUBLISH BELL speed=%ld token=%d",
         (long)speed,
         gPublishToken
     );
-
-    notify_set_state(
-            gPublishToken,
-            (uint64_t)speed
-        );
-
-    notify_post(
-            "com.sushibta.vmlspeedbubble.speed"
-        );
 }
 
 static id VMLHookMethodCallInit(
@@ -525,7 +547,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V14.2.2");
+    VMLLog(@"VML RUNTIME BRIDGE V14.3");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
