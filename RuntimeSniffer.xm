@@ -10,6 +10,107 @@ static void VMLLog(NSString *format, ...);
 
 static int gPublishToken = 0;
 
+static int gCarPlaySceneToken = 0;
+static BOOL gLastCarPlaySceneActive = NO;
+static BOOL gHaveCarPlaySceneState = NO;
+
+static BOOL VMLIsTemplateCarPlayScene(UIScene *scene) {
+    if (!scene) return NO;
+
+    NSString *className = NSStringFromClass(scene.class);
+    NSString *role = scene.session.role ?: @"";
+
+    if ([className containsString:@"CPTemplateApplicationScene"])
+        return YES;
+
+    if ([role localizedCaseInsensitiveContainsString:@"CarTemplateApplication"])
+        return YES;
+
+    if ([role localizedCaseInsensitiveContainsString:@"CarPlay"])
+        return YES;
+
+    return NO;
+}
+
+static BOOL VMLCarPlayTemplateSceneIsForeground(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+
+    for (UIScene *scene in app.connectedScenes) {
+        if (!VMLIsTemplateCarPlayScene(scene))
+            continue;
+
+        UISceneActivationState state = scene.activationState;
+
+        VMLLog(
+            @"[cpscene] class=%@ role=%@ activation=%ld",
+            NSStringFromClass(scene.class),
+            scene.session.role ?: @"nil",
+            (long)state
+        );
+
+        if (state == UISceneActivationStateForegroundActive)
+            return YES;
+    }
+
+    return NO;
+}
+
+static void VMLPublishCarPlaySceneState(BOOL active) {
+    if (gCarPlaySceneToken == 0) {
+        int token = 0;
+
+        uint32_t status =
+            notify_register_check(
+                "com.sushibta.vmlspeedbubble.vmlcarplaysceneactive",
+                &token
+            );
+
+        if (status != NOTIFY_STATUS_OK) {
+            VMLLog(@"cpscene notify_register_check failed=%u", status);
+            return;
+        }
+
+        gCarPlaySceneToken = token;
+    }
+
+    notify_set_state(
+        gCarPlaySceneToken,
+        active ? 1 : 0
+    );
+
+    notify_post(
+        "com.sushibta.vmlspeedbubble.vmlcarplaysceneactive"
+    );
+
+    if (!gHaveCarPlaySceneState ||
+        gLastCarPlaySceneActive != active) {
+
+        VMLLog(
+            @"*** VML CPTEMPLATE SCENE ACTIVE = %d ***",
+            active
+        );
+    }
+
+    gLastCarPlaySceneActive = active;
+    gHaveCarPlaySceneState = YES;
+}
+
+static void VMLStartCarPlayTemplateSceneWatcher(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VMLPublishCarPlaySceneState(
+            VMLCarPlayTemplateSceneIsForeground()
+        );
+
+        [NSTimer scheduledTimerWithTimeInterval:0.25
+                                        repeats:YES
+                                          block:^(__unused NSTimer *timer) {
+            VMLPublishCarPlaySceneState(
+                VMLCarPlayTemplateSceneIsForeground()
+            );
+        }];
+    });
+}
+
 static int gPhoneForegroundToken = 0;
 
 static void VMLPublishPhoneForeground(BOOL foreground) {
@@ -274,6 +375,8 @@ static void VMLStart(void) {
     if (![bundle isEqualToString:@"vn.vietmap.live"]) {
         return;
     }
+
+    VMLStartCarPlayTemplateSceneWatcher();
 
     VMLInstallPhoneForegroundObservers();
 
