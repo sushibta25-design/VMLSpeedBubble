@@ -985,7 +985,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.5 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.5.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1114,7 +1114,7 @@ static void VMLStartCarPlaySpeedFallback(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.5 VAR-TMP RELAY");
+        VMLLog(@"VML SPEED BUBBLE V14.5.1 PRIME BUILD FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1125,7 +1125,8 @@ static void VMLStartCarPlaySpeedFallback(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V14.5 SPRINGBOARD ACTIVE");
+            
+            VMLSpringBoardPrimeSharedSpeed();VMLLog(@"V14.5.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1140,7 +1141,7 @@ static void VMLStartCarPlaySpeedFallback(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.5 CARPLAY ACTIVE"
+                @"V14.5.1 CARPLAY ACTIVE"
             );
 
             return;
