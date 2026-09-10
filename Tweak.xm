@@ -960,9 +960,6 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             scene.screen.bounds;
     }
 
-    CGFloat sceneW =
-        MAX(sceneBounds.size.width, 1.0);
-
     CGFloat sceneH =
         MAX(sceneBounds.size.height, 1.0);
 
@@ -1047,7 +1044,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.5 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.5.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -1086,7 +1083,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         1.0;
 
     VMLLog(
-        @"[overlay] V13.5 frame=%@ speed=%ld cpScene=%d",
+        @"[overlay] V13.5.1 frame=%@ speed=%ld cpScene=%d",
         NSStringFromCGRect(gCarPlayOverlayWindow.frame),
         (long)gCurrentSpeed,
         gVMLCarPlaySceneActive
@@ -1123,7 +1120,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V13.5.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.5.1.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -1139,7 +1136,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.5 PHONE HIDE + DRAG");
+        VMLLog(@"VML SPEED BUBBLE V13.5.1 BUILD FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1163,7 +1160,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.5 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.5.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1177,7 +1174,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.5 CARPLAY ACTIVE"
+                @"V13.5.1 CARPLAY ACTIVE"
             );
 
             return;
