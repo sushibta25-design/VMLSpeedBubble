@@ -6,16 +6,39 @@
 
 
 @interface VMLPassthroughWindow : UIWindow
+@property (nonatomic, weak) UIView *interactiveBubble;
 @end
 
 @implementation VMLPassthroughWindow
 
-- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return [super pointInside:point withEvent:event];
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *bubble =
+        self.interactiveBubble;
+
+    if (!bubble ||
+        bubble.hidden ||
+        bubble.alpha <= 0.01) {
+
+        return nil;
+    }
+
+    CGPoint p =
+        [bubble convertPoint:point fromView:self];
+
+    if (CGRectContainsPoint(
+            bubble.bounds,
+            p
+        )) {
+
+        return [bubble hitTest:p
+                     withEvent:event] ?: bubble;
+    }
+
+    return nil;
 }
 
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    return [super hitTest:point withEvent:event];
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return ([self hitTest:point withEvent:event] != nil);
 }
 
 @end
@@ -315,6 +338,15 @@ static void VMLStartCarPlaySceneReceiver(void) {
     );
 }
 
+
+static void VMLApplyPhoneVisibility(void) {
+    if (!gPhoneWindow)
+        return;
+
+    gPhoneWindow.hidden =
+        gPhoneForeground;
+}
+
 #pragma mark - Phone VietMap foreground receiver
 
 
@@ -343,6 +375,8 @@ static void VMLReadPhoneForeground(void) {
             gPhoneForeground
         );
     }
+
+    VMLApplyPhoneVisibility();
 }
 
 static void VMLStartPhoneForegroundReceiver(void) {
@@ -454,6 +488,7 @@ static void VMLCreatePhoneBubble(void) {
     [vc.view addSubview:bubble];
 
     gPhoneWindow.hidden = NO;
+    VMLApplyPhoneVisibility();
 
     VMLUpdateBubble(bubble);
 
@@ -633,92 +668,95 @@ static void VMLHandleCarPlayBubblePan(
     UIPanGestureRecognizer *pan
 ) {
     if (!gCarPlayOverlayWindow ||
-        !gCarPlayOverlayWindow.windowScene) {
+        !gCarPlayBubble) {
 
         return;
     }
 
-    if (pan.state == UIGestureRecognizerStateBegan) {
-        gCarPlayDragging = YES;
-    }
+    UIView *canvas =
+        gCarPlayOverlayWindow.rootViewController.view;
 
-    UIWindowScene *scene =
-        gCarPlayOverlayWindow.windowScene;
+    if (!canvas)
+        return;
 
-    CGRect sceneBounds =
-        scene.coordinateSpace.bounds;
+    if (pan.state ==
+        UIGestureRecognizerStateBegan) {
 
-    if (CGRectIsEmpty(sceneBounds)) {
-        sceneBounds =
-            scene.screen.bounds;
+        gCarPlayDragging =
+            YES;
     }
 
     CGPoint translation =
-        [pan translationInView:nil];
+        [pan translationInView:canvas];
 
-    CGRect frame =
-        gCarPlayOverlayWindow.frame;
+    CGPoint center =
+        gCarPlayBubble.center;
 
-    frame.origin.x +=
+    center.x +=
         translation.x;
 
-    frame.origin.y +=
+    center.y +=
         translation.y;
 
-    CGFloat margin = 4.0;
+    CGFloat halfW =
+        gCarPlayBubble.bounds.size.width / 2.0;
 
-    frame.origin.x =
+    CGFloat halfH =
+        gCarPlayBubble.bounds.size.height / 2.0;
+
+    CGFloat W =
+        MAX(canvas.bounds.size.width, 1.0);
+
+    CGFloat H =
+        MAX(canvas.bounds.size.height, 1.0);
+
+    center.x =
         MAX(
-            margin,
+            halfW + 4.0,
             MIN(
-                sceneBounds.size.width -
-                    frame.size.width -
-                    margin,
-                frame.origin.x
+                W - halfW - 4.0,
+                center.x
             )
         );
 
-    frame.origin.y =
+    center.y =
         MAX(
-            margin,
+            halfH + 4.0,
             MIN(
-                sceneBounds.size.height -
-                    frame.size.height -
-                    margin,
-                frame.origin.y
+                H - halfH - 4.0,
+                center.y
             )
         );
 
-    gCarPlayOverlayWindow.frame =
-        frame;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    gCarPlayBubble.center =
+        center;
+    [CATransaction commit];
 
     [pan setTranslation:CGPointZero
-                 inView:nil];
-
-    CGFloat centerX =
-        CGRectGetMidX(frame);
-
-    CGFloat centerY =
-        CGRectGetMidY(frame);
+                 inView:canvas];
 
     gCarPlayBubbleCenterRatio =
         CGPointMake(
-            centerX /
-                MAX(sceneBounds.size.width, 1.0),
-            centerY /
-                MAX(sceneBounds.size.height, 1.0)
+            center.x / W,
+            center.y / H
         );
 
     gCarPlayBubblePositionLoaded =
         YES;
 
     if (pan.state ==
-        UIGestureRecognizerStateEnded ||
+            UIGestureRecognizerStateEnded ||
         pan.state ==
-        UIGestureRecognizerStateCancelled) {
+            UIGestureRecognizerStateCancelled ||
+        pan.state ==
+            UIGestureRecognizerStateFailed) {
 
         VMLSaveCarPlayBubblePosition();
-        gCarPlayDragging = NO;
+
+        gCarPlayDragging =
+            NO;
 
         VMLLog(
             @"*** CARPLAY BUBBLE MOVED x=%.3f y=%.3f ***",
@@ -781,7 +819,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             )
         );
 
-    CGRect bubbleWindowFrame =
+    CGRect bubbleFrame =
         VMLCarPlayBubbleFrameForScene(
             sceneBounds,
             size
@@ -795,7 +833,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         gCarPlayOverlayWindow.backgroundColor =
             UIColor.clearColor;
 
-        // Tiny non-key window only around the sign.
+        // Full-screen pass-through window: only the bubble itself receives touches.
         gCarPlayOverlayWindow.windowLevel =
             UIWindowLevelAlert + 100.0;
 
@@ -820,13 +858,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
                 size
             );
 
-        bubble.frame =
-            CGRectMake(
-                0,
-                0,
-                size,
-                size
-            );
+        bubble.frame = bubbleFrame;
 
         bubble.userInteractionEnabled =
             YES;
@@ -852,34 +884,35 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         gCarPlayBubble =
             bubble;
 
+        ((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble =
+            bubble;
+
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.7 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.8 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
-            NSStringFromCGRect(bubbleWindowFrame)
+            NSStringFromCGRect(bubbleFrame)
         );
     }
 
-    if (!gCarPlayDragging) {
-        gCarPlayOverlayWindow.frame =
-            bubbleWindowFrame;
-    }
+    gCarPlayOverlayWindow.frame =
+        sceneBounds;
 
     gCarPlayOverlayWindow.rootViewController.view.frame =
         CGRectMake(
             0,
             0,
-            size,
-            size
+            sceneBounds.size.width,
+            sceneBounds.size.height
         );
 
     if (gCarPlayBubble) {
-        gCarPlayBubble.frame =
-            CGRectMake(
-                0,
-                0,
-                size,
-                size
-            );
+        if (!gCarPlayDragging) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            gCarPlayBubble.frame =
+                bubbleFrame;
+            [CATransaction commit];
+        }
 
         VMLUpdateBubble(
             gCarPlayBubble
@@ -936,7 +969,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.7 FAST SYNC + SMOOTH DRAG");
+        VMLLog(@"VML SPEED BUBBLE V13.8 THREE-FIX BUILD");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -959,7 +992,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.7 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.8 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -973,7 +1006,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.7 CARPLAY ACTIVE"
+                @"V13.8 CARPLAY ACTIVE"
             );
 
             return;

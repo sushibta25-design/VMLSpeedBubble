@@ -106,39 +106,41 @@ static void VMLStartCarPlayTemplateSceneWatcher(void) {
 }
 
 static int gPhoneForegroundToken = 0;
-static BOOL gLastPhoneSceneForeground = NO;
-static BOOL gHavePhoneSceneState = NO;
+static BOOL gLastPhoneForeground = NO;
+static BOOL gHavePhoneForegroundState = NO;
 
-static BOOL VMLLooksLikePhoneWindowScene(UIWindowScene *ws) {
-    if (!ws) return NO;
+static BOOL VMLHasActiveMainScreenWindow(void) {
+    UIApplication *app =
+        UIApplication.sharedApplication;
 
-    CGSize size = ws.screen.bounds.size;
-
-    CGFloat w = MIN(size.width, size.height);
-    CGFloat h = MAX(size.width, size.height);
-
-    // iPhone display: narrow + tall. This intentionally excludes
-    // the 426/640 x 240 CarPlay screen.
-    return (w <= 500.0 && h >= 600.0);
-}
-
-static BOOL VMLPhoneSceneIsForeground(void) {
-    UIApplication *app = UIApplication.sharedApplication;
+    UIScreen *mainScreen =
+        UIScreen.mainScreen;
 
     for (UIScene *scene in app.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class])
             continue;
 
-        UIWindowScene *ws = (UIWindowScene *)scene;
+        UIWindowScene *ws =
+            (UIWindowScene *)scene;
 
-        if (!VMLLooksLikePhoneWindowScene(ws))
+        if (ws.screen != mainScreen)
             continue;
 
-        BOOL active =
-            (ws.activationState == UISceneActivationStateForegroundActive);
+        if (ws.activationState !=
+            UISceneActivationStateForegroundActive) {
 
-        if (active)
-            return YES;
+            continue;
+        }
+
+        for (UIWindow *window in ws.windows) {
+            if (!window.hidden &&
+                window.alpha > 0.01 &&
+                window.bounds.size.width > 1.0 &&
+                window.bounds.size.height > 1.0) {
+
+                return YES;
+            }
+        }
     }
 
     return NO;
@@ -155,11 +157,15 @@ static void VMLPublishPhoneForeground(BOOL foreground) {
             );
 
         if (status != NOTIFY_STATUS_OK) {
-            VMLLog(@"phoneforeground register failed=%u", status);
+            VMLLog(
+                @"phoneforeground register failed=%u",
+                status
+            );
             return;
         }
 
-        gPhoneForegroundToken = token;
+        gPhoneForegroundToken =
+            token;
     }
 
     notify_set_state(
@@ -171,33 +177,57 @@ static void VMLPublishPhoneForeground(BOOL foreground) {
         "com.sushibta.vmlspeedbubble.phoneforeground"
     );
 
-    if (!gHavePhoneSceneState ||
-        gLastPhoneSceneForeground != foreground) {
+    if (!gHavePhoneForegroundState ||
+        gLastPhoneForeground != foreground) {
 
         VMLLog(
-            @"*** VML PHONE SCENE FOREGROUND = %d ***",
+            @"*** VML PHONE MAIN-SCREEN ACTIVE = %d ***",
             foreground
         );
     }
 
-    gLastPhoneSceneForeground = foreground;
-    gHavePhoneSceneState = YES;
+    gLastPhoneForeground =
+        foreground;
+
+    gHavePhoneForegroundState =
+        YES;
+}
+
+static void VMLRefreshPhoneForegroundEvent(void) {
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            VMLPublishPhoneForeground(
+                VMLHasActiveMainScreenWindow()
+            );
+        }
+    );
 }
 
 static void VMLInstallPhoneForegroundObservers(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        VMLPublishPhoneForeground(
-            VMLPhoneSceneIsForeground()
-        );
+    NSNotificationCenter *nc =
+        NSNotificationCenter.defaultCenter;
 
-        [NSTimer scheduledTimerWithTimeInterval:0.20
-                                        repeats:YES
-                                          block:^(__unused NSTimer *timer) {
-            VMLPublishPhoneForeground(
-                VMLPhoneSceneIsForeground()
-            );
+    NSArray<NSNotificationName> *names =
+        @[
+            UIApplicationDidBecomeActiveNotification,
+            UIApplicationWillResignActiveNotification,
+            UIApplicationDidEnterBackgroundNotification,
+            UISceneDidActivateNotification,
+            UISceneWillDeactivateNotification,
+            UISceneDidEnterBackgroundNotification
+        ];
+
+    for (NSNotificationName name in names) {
+        [nc addObserverForName:name
+                        object:nil
+                         queue:NSOperationQueue.mainQueue
+                    usingBlock:^(__unused NSNotification *note) {
+            VMLRefreshPhoneForegroundEvent();
         }];
-    });
+    }
+
+    VMLRefreshPhoneForegroundEvent();
 }
 
 
@@ -260,74 +290,6 @@ static NSInteger VMLSpeedFromObject(id obj) {
     return -1;
 }
 
-static NSInteger VMLCurrentSpeedLimitFromArguments(id arguments) {
-    if (!arguments)
-        return -1;
-
-    // Direct updateSpeedLimit payload.
-    NSInteger direct =
-        VMLSpeedFromObject(arguments);
-
-    if (direct > 0 && direct <= 200)
-        return direct;
-
-    if ([arguments isKindOfClass:NSDictionary.class]) {
-        NSDictionary *dict =
-            (NSDictionary *)arguments;
-
-        // Only current-limit keys. Deliberately ignore nextSpeedLimit.
-        NSArray<NSString *> *keys =
-            @[
-                @"speedLimit",
-                @"currentSpeedLimit",
-                @"current_speed_limit"
-            ];
-
-        for (NSString *key in keys) {
-            id value =
-                dict[key];
-
-            NSInteger speed =
-                VMLSpeedFromObject(value);
-
-            if (speed > 0 && speed <= 200)
-                return speed;
-        }
-
-        // Some Flutter payloads wrap the road data one level deeper.
-        NSArray<NSString *> *containers =
-            @[
-                @"data",
-                @"arguments",
-                @"payload",
-                @"road",
-                @"currentRoad"
-            ];
-
-        for (NSString *key in containers) {
-            id nested =
-                dict[key];
-
-            NSInteger speed =
-                VMLCurrentSpeedLimitFromArguments(nested);
-
-            if (speed > 0 && speed <= 200)
-                return speed;
-        }
-    }
-
-    if ([arguments isKindOfClass:NSArray.class]) {
-        for (id item in (NSArray *)arguments) {
-            NSInteger speed =
-                VMLCurrentSpeedLimitFromArguments(item);
-
-            if (speed > 0 && speed <= 200)
-                return speed;
-        }
-    }
-
-    return -1;
-}
 
 static void VMLPublishValidSpeed(NSInteger speed) {
     // V12.3: 0 means "no fresh value". Never overwrite the last valid
@@ -397,19 +359,16 @@ static id VMLHookMethodCallInit(
 
     NSInteger speed = -1;
 
+    // Proven VietMap source: Flutter method `updateSpeedLimit`.
+    // Do NOT scan arbitrary dictionaries/arrays; that caused random 1..199 values.
     if ([methodName isEqualToString:@"updateSpeedLimit"]) {
         speed =
-            VMLCurrentSpeedLimitFromArguments(arguments);
-    } else if ([arguments isKindOfClass:NSDictionary.class] ||
-               [arguments isKindOfClass:NSArray.class]) {
-        speed =
-            VMLCurrentSpeedLimitFromArguments(arguments);
+            VMLSpeedFromObject(arguments);
     }
 
     if (speed > 0 && speed <= 200) {
         VMLLog(
-            @"CURRENT SPEED LIMIT method=%@ speed=%ld",
-            methodName ?: @"nil",
+            @"CURRENT SPEED LIMIT method=updateSpeedLimit speed=%ld",
             (long)speed
         );
 
@@ -495,7 +454,7 @@ static void VMLStart(void) {
 
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V13.7");
+    VMLLog(@"VML RUNTIME BRIDGE V13.8");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
