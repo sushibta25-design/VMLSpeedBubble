@@ -5,6 +5,27 @@
 static IMP gOrigMethodCallInit = NULL;
 static int gPublishToken = 0;
 
+static NSString *VMLLastSpeedPath(void) {
+    return @"/var/mobile/VMLLastSpeed.txt";
+}
+
+static void VMLSaveLastValidSpeed(NSInteger speed) {
+    if (speed <= 0 || speed > 200) return;
+
+    NSString *value = [NSString stringWithFormat:@"%ld", (long)speed];
+    NSError *error = nil;
+    [value writeToFile:VMLLastSpeedPath()
+            atomically:YES
+              encoding:NSUTF8StringEncoding
+                 error:&error];
+
+    if (error) {
+        VMLLog(@"CACHE WRITE ERROR %@", error);
+    } else {
+        VMLLog(@"*** CACHED LAST VALID SPEED=%ld ***", (long)speed);
+    }
+}
+
 static NSString *VMLLogPath(void) {
     NSString *documents =
         [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
@@ -137,6 +158,10 @@ static id VMLHookMethodCallInit(
             arguments,
             (long)speed
         );
+
+        if (speed > 0 && speed <= 200) {
+            VMLSaveLastValidSpeed(speed);
+        }
 
         VMLPublishSpeed(speed);
     }

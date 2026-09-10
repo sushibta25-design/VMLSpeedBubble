@@ -12,6 +12,8 @@ static int gSpeedNotifyToken = 0;
 static UIWindow *gPhoneWindow = nil;
 static __weak UIView *gNativeCarPlayHost = nil;
 static UIView *gNativeCarPlayBubble = nil;
+static __weak UIViewController *gLastNativeController = nil;
+static BOOL gNativeWatchdogRunning = NO;
 
 static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
@@ -110,6 +112,37 @@ static void VMLUpdateAllBubbles(void) {
     });
 }
 
+
+#pragma mark - Persistent last valid speed
+
+static NSString *VMLLastSpeedPath(void) {
+    return @"/var/mobile/VMLLastSpeed.txt";
+}
+
+static NSInteger VMLReadCachedLastValidSpeed(void) {
+    NSError *error = nil;
+    NSString *s = [NSString stringWithContentsOfFile:VMLLastSpeedPath()
+                                            encoding:NSUTF8StringEncoding
+                                               error:&error];
+    if (error || !s.length) return -1;
+
+    NSInteger value = s.integerValue;
+    if (value <= 0 || value > 200) return -1;
+    return value;
+}
+
+static void VMLRestoreCachedSpeedImmediately(void) {
+    NSInteger cached = VMLReadCachedLastValidSpeed();
+    if (cached <= 0 || cached > 200) {
+        VMLLog(@"[cache] no valid cached speed");
+        return;
+    }
+
+    gCurrentSpeed = cached;
+    VMLLog(@"*** IMMEDIATE CACHED SPEED RESTORED = %ld ***", (long)cached);
+    VMLUpdateAllBubbles();
+}
+
 #pragma mark - Speed IPC
 
 static void VMLReadSpeed(void) {
@@ -121,6 +154,25 @@ static void VMLReadSpeed(void) {
 
     NSInteger speed = (NSInteger)state;
     if (speed < 0 || speed > 200) return;
+
+    if (speed == 0) {
+        if (gCurrentSpeed > 0 && gCurrentSpeed <= 200) {
+            VMLLog(@"[speed] received 0 -> KEEP LAST VALID %ld", (long)gCurrentSpeed);
+            VMLUpdateAllBubbles();
+            return;
+        }
+
+        NSInteger cached = VMLReadCachedLastValidSpeed();
+        if (cached > 0 && cached <= 200) {
+            gCurrentSpeed = cached;
+            VMLLog(@"[speed] received 0 -> RESTORE CACHE %ld", (long)cached);
+            VMLUpdateAllBubbles();
+            return;
+        }
+
+        VMLLog(@"[speed] received 0 and no cache -> --");
+        return;
+    }
 
     gCurrentSpeed = speed;
     VMLLog(@"*** SPEED RECEIVED = %ld ***", (long)gCurrentSpeed);
@@ -148,6 +200,8 @@ static void VMLStartSpeedReceiver(void) {
 
     gSpeedNotifyToken = token;
     VMLLog(@"SPEED RECEIVER ACTIVE token=%d bundle=%@", token, VMLBundle());
+
+    VMLRestoreCachedSpeedImmediately();
     VMLReadSpeed();
 }
 
@@ -285,7 +339,7 @@ static void VMLAttachNativeCarPlayBubble(UIView *host, NSString *reason) {
     gNativeCarPlayHost = host;
     gNativeCarPlayBubble = bubble;
 
-    VMLLog(@"*** NATIVE CARPLAY BUBBLE ADDED V12 reason=%@ host=%@ frame=%@ window=%@ windowFrame=%@ text=%@ ***",
+    VMLLog(@"*** NATIVE CARPLAY BUBBLE ADDED V12.1 reason=%@ host=%@ frame=%@ window=%@ windowFrame=%@ text=%@ ***",
            reason,
            NSStringFromClass(host.class),
            NSStringFromCGRect(host.frame),
@@ -299,6 +353,8 @@ static void VMLHandleNativeCarPlayController(UIViewController *vc, NSString *rea
 
     NSString *name = NSStringFromClass(vc.class);
     if (!VMLClassLooksNativeCarPlayController(name)) return;
+
+    gLastNativeController = vc;
 
     VMLLog(@"[native] controller=%@ reason=%@ view=%@ frame=%@ window=%@",
            name,
@@ -322,6 +378,62 @@ static void VMLHandleNativeCarPlayController(UIViewController *vc, NSString *rea
             }
         }
     );
+}
+
+
+#pragma mark - Native CarPlay persistent watchdog
+
+static void VMLNativeWatchdogTick(void) {
+    if (!VMLIsCarPlayApp()) {
+        gNativeWatchdogRunning = NO;
+        return;
+    }
+
+    BOOL bubbleAlive =
+        gNativeCarPlayBubble &&
+        gNativeCarPlayBubble.superview &&
+        gNativeCarPlayBubble.window &&
+        !gNativeCarPlayBubble.hidden;
+
+    if (!bubbleAlive) {
+        UIViewController *vc = gLastNativeController;
+
+        if (vc) {
+            UIView *host = VMLPreferredNativeHost(vc);
+            if (host && host.window) {
+                VMLLog(@"[watchdog] bubble missing -> reattach host=%@ frame=%@",
+                       NSStringFromClass(host.class),
+                       NSStringFromCGRect(host.frame));
+
+                VMLAttachNativeCarPlayBubble(host, @"watchdog-reattach");
+            } else {
+                VMLLog(@"[watchdog] bubble missing, last controller has no live host");
+            }
+        } else {
+            VMLLog(@"[watchdog] bubble missing, no native controller captured yet");
+        }
+    } else {
+        VMLUpdateBubble(gNativeCarPlayBubble);
+    }
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+        dispatch_get_main_queue(),
+        ^{
+            VMLNativeWatchdogTick();
+        }
+    );
+}
+
+static void VMLStartNativeWatchdog(void) {
+    if (!VMLIsCarPlayApp() || gNativeWatchdogRunning) return;
+
+    gNativeWatchdogRunning = YES;
+    VMLLog(@"[watchdog] V12.1 native watchdog started");
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VMLNativeWatchdogTick();
+    });
 }
 
 #pragma mark - Hooks
@@ -369,12 +481,12 @@ static void VMLHandleNativeCarPlayController(UIViewController *vc, NSString *rea
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12 NATIVE CARPLAY HOST");
+        VMLLog(@"VML SPEED BUBBLE V12.1 INSTANT + PERSISTENT");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
-            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V12 ***");
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V12.1 ***");
             VMLStartSpeedReceiver();
 
             dispatch_after(
@@ -385,14 +497,15 @@ static void VMLHandleNativeCarPlayController(UIViewController *vc, NSString *rea
                 }
             );
 
-            VMLLog(@"V12 SPRINGBOARD ACTIVE");
+            VMLLog(@"V12.1 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
-            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V12 ***");
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V12.1 ***");
             VMLStartSpeedReceiver();
-            VMLLog(@"V12 NATIVE CARPLAY ACTIVE");
+            VMLStartNativeWatchdog();
+            VMLLog(@"V12.1 NATIVE CARPLAY ACTIVE");
             return;
         }
     }
