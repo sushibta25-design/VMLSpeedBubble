@@ -46,6 +46,8 @@
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
+static void VMLCarPlayHardReadSpeed(NSString *reason);
+static void VMLStartCarPlaySpeedFallback(void);
 static int gSpeedNotifyToken = 0;
 static int gVMLCarPlaySceneToken = 0;
 static BOOL gVMLCarPlaySceneActive = NO;
@@ -854,7 +856,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.2 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.2.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -942,7 +944,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.2 CARPLAY SPEED RECEIVER FIX");
+        VMLLog(@"VML SPEED BUBBLE V14.2.1 BUILD FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -953,7 +955,7 @@ static void VMLStartOverlayLoop(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V14.2 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.2.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -967,7 +969,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.2 CARPLAY ACTIVE"
+                @"V14.2.1 CARPLAY ACTIVE"
             );
 
             return;

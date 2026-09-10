@@ -1,6 +1,6 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 0.7.5
+Version: 0.7.6
 Architecture: iphoneos-arm64e
 Description: Floating VietMap Live speed limit bubble for Dopamine RootHide.
 Maintainer: sushibta25-design
