@@ -112,6 +112,51 @@ static void VMLStartCarPlayTemplateSceneWatcher(void) {
 }
 
 static int gPhoneForegroundToken = 0;
+static BOOL gLastPhoneSceneForeground = NO;
+static BOOL gHavePhoneSceneState = NO;
+
+static BOOL VMLLooksLikePhoneWindowScene(UIWindowScene *ws) {
+    if (!ws) return NO;
+
+    CGSize size = ws.screen.bounds.size;
+
+    CGFloat w = MIN(size.width, size.height);
+    CGFloat h = MAX(size.width, size.height);
+
+    // iPhone display: narrow + tall. This intentionally excludes
+    // the 426/640 x 240 CarPlay screen.
+    return (w <= 500.0 && h >= 600.0);
+}
+
+static BOOL VMLPhoneSceneIsForeground(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+
+    for (UIScene *scene in app.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class])
+            continue;
+
+        UIWindowScene *ws = (UIWindowScene *)scene;
+
+        if (!VMLLooksLikePhoneWindowScene(ws))
+            continue;
+
+        BOOL active =
+            (ws.activationState == UISceneActivationStateForegroundActive);
+
+        VMLLog(
+            @"[phonescene] class=%@ size=%@ activation=%ld active=%d",
+            NSStringFromClass(ws.class),
+            NSStringFromCGSize(ws.screen.bounds.size),
+            (long)ws.activationState,
+            active
+        );
+
+        if (active)
+            return YES;
+    }
+
+    return NO;
+}
 
 static void VMLPublishPhoneForeground(BOOL foreground) {
     if (gPhoneForegroundToken == 0) {
@@ -140,44 +185,32 @@ static void VMLPublishPhoneForeground(BOOL foreground) {
         "com.sushibta.vmlspeedbubble.phoneforeground"
     );
 
-    VMLLog(
-        @"*** VML PHONE FOREGROUND = %d ***",
-        foreground
-    );
+    if (!gHavePhoneSceneState ||
+        gLastPhoneSceneForeground != foreground) {
+
+        VMLLog(
+            @"*** VML PHONE SCENE FOREGROUND = %d ***",
+            foreground
+        );
+    }
+
+    gLastPhoneSceneForeground = foreground;
+    gHavePhoneSceneState = YES;
 }
 
 static void VMLInstallPhoneForegroundObservers(void) {
-    NSNotificationCenter *nc =
-        NSNotificationCenter.defaultCenter;
-
-    [nc addObserverForName:UIApplicationDidBecomeActiveNotification
-                    object:nil
-                     queue:NSOperationQueue.mainQueue
-                usingBlock:^(__unused NSNotification *note) {
-        VMLPublishPhoneForeground(YES);
-    }];
-
-    [nc addObserverForName:UIApplicationWillResignActiveNotification
-                    object:nil
-                     queue:NSOperationQueue.mainQueue
-                usingBlock:^(__unused NSNotification *note) {
-        VMLPublishPhoneForeground(NO);
-    }];
-
-    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
-                    object:nil
-                     queue:NSOperationQueue.mainQueue
-                usingBlock:^(__unused NSNotification *note) {
-        VMLPublishPhoneForeground(NO);
-    }];
-
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIApplicationState state =
-            UIApplication.sharedApplication.applicationState;
-
         VMLPublishPhoneForeground(
-            state == UIApplicationStateActive
+            VMLPhoneSceneIsForeground()
         );
+
+        [NSTimer scheduledTimerWithTimeInterval:0.20
+                                        repeats:YES
+                                          block:^(__unused NSTimer *timer) {
+            VMLPublishPhoneForeground(
+                VMLPhoneSceneIsForeground()
+            );
+        }];
     });
 }
 

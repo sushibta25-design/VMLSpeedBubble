@@ -654,7 +654,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.2.2 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V13.3 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleWindowFrame)
         );
@@ -693,7 +693,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         1.0;
 
     VMLLog(
-        @"[overlay] V13.2.2 frame=%@ speed=%ld cpScene=%d",
+        @"[overlay] V13.3 frame=%@ speed=%ld cpScene=%d",
         NSStringFromCGRect(gCarPlayOverlayWindow.frame),
         (long)gCurrentSpeed,
         gVMLCarPlaySceneActive
@@ -730,7 +730,7 @@ static void VMLStartOverlayLoop(void) {
     gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[overlay] V13.2.2.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
+        @"[overlay] V13.3.1 CPTEMPLATE SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
@@ -746,7 +746,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.2.2 CLEAN BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V13.3 PHONE-SCENE FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -769,7 +769,7 @@ static void VMLStartOverlayLoop(void) {
                 }
             );
 
-            VMLLog(@"V13.2.2 SPRINGBOARD ACTIVE");
+            VMLLog(@"V13.3 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -783,7 +783,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.2.2 CARPLAY ACTIVE"
+                @"V13.3 CARPLAY ACTIVE"
             );
 
             return;
