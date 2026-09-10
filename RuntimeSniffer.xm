@@ -5,29 +5,6 @@
 static IMP gOrigMethodCallInit = NULL;
 static int gPublishToken = 0;
 
-static void VMLLog(NSString *format, ...);
-
-static NSString *VMLLastSpeedPath(void) {
-    return @"/var/mobile/VMLLastSpeed.txt";
-}
-
-static void VMLSaveLastValidSpeed(NSInteger speed) {
-    if (speed <= 0 || speed > 200) return;
-
-    NSString *value = [NSString stringWithFormat:@"%ld", (long)speed];
-    NSError *error = nil;
-    [value writeToFile:VMLLastSpeedPath()
-            atomically:YES
-              encoding:NSUTF8StringEncoding
-                 error:&error];
-
-    if (error) {
-        VMLLog(@"CACHE WRITE ERROR %@", error);
-    } else {
-        VMLLog(@"*** CACHED LAST VALID SPEED=%ld ***", (long)speed);
-    }
-}
-
 static NSString *VMLLogPath(void) {
     NSString *documents =
         [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
@@ -61,7 +38,7 @@ static void VMLLog(NSString *format, ...) {
                     error:&error];
 
         if (error) {
-            NSLog(@"[VMLV4] WRITE ERROR %@", error);
+            NSLog(@"[VMLV12.3] WRITE ERROR %@", error);
         }
     } else {
         [fh seekToEndOfFile];
@@ -73,7 +50,7 @@ static void VMLLog(NSString *format, ...) {
         [fh closeFile];
     }
 
-    NSLog(@"[VMLV4] %@", msg);
+    NSLog(@"[VMLV12.3] %@", msg);
 }
 
 static NSInteger VMLSpeedFromObject(id obj) {
@@ -87,9 +64,11 @@ static NSInteger VMLSpeedFromObject(id obj) {
     return -1;
 }
 
-static void VMLPublishSpeed(NSInteger speed) {
-    if (speed < 0 || speed > 200) {
-        VMLLog(@"IGNORE invalid speed=%ld", (long)speed);
+static void VMLPublishValidSpeed(NSInteger speed) {
+    // V12.3: 0 means "no fresh value". Never overwrite the last valid
+    // notify state with 0, so CarPlay can read the latest known limit instantly.
+    if (speed <= 0 || speed > 200) {
+        VMLLog(@"KEEP LAST VALID - ignore publish speed=%ld", (long)speed);
         return;
     }
 
@@ -125,7 +104,7 @@ static void VMLPublishSpeed(NSInteger speed) {
         );
 
     VMLLog(
-        @"*** PUBLISHED SPEED=%ld stateStatus=%u postStatus=%u ***",
+        @"*** PUBLISHED VALID SPEED=%ld stateStatus=%u postStatus=%u ***",
         (long)speed,
         stateStatus,
         postStatus
@@ -161,11 +140,7 @@ static id VMLHookMethodCallInit(
             (long)speed
         );
 
-        if (speed > 0 && speed <= 200) {
-            VMLSaveLastValidSpeed(speed);
-        }
-
-        VMLPublishSpeed(speed);
+        VMLPublishValidSpeed(speed);
     }
 
     return result;
@@ -225,7 +200,7 @@ static void VMLStart(void) {
     }
 
     VMLLog(@"========================================");
-    VMLLog(@"VML RUNTIME BRIDGE V4");
+    VMLLog(@"VML RUNTIME BRIDGE V12.3");
     VMLLog(@"bundle=%@", bundle);
     VMLLog(@"process=%@", process);
     VMLLog(@"home=%@", NSHomeDirectory());
