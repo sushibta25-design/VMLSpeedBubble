@@ -274,6 +274,8 @@ static void VMLLogViewNode(UIView *view, NSInteger depth, NSString *kind) {
            (unsigned long)view.subviews.count);
 }
 
+static void VMLLogResponderChain(UIResponder *start, NSString *prefix);
+
 static void VMLDumpRenderTreeRecursive(UIView *view, NSInteger depth, NSUInteger *count) {
     if (!view || !count) return;
     if (depth > 14 || *count >= 220) return;
