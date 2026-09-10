@@ -170,6 +170,8 @@ static void VMLUpdateBubble(UIView *bubble) {
 }
 
 static void VMLUpdateAllBubbles(void) {
+    if (gCarPlayDragging)
+        return;
 
     if (gCarPlayBubble) {
         VMLUpdateBubble(gCarPlayBubble);
@@ -506,79 +508,76 @@ static void VMLHandleCarPlayBubblePan(
     if (!canvas)
         return;
 
-    if (pan.state ==
-        UIGestureRecognizerStateBegan) {
+    UIGestureRecognizerState state =
+        pan.state;
 
-        gCarPlayDragging =
+    if (state == UIGestureRecognizerStateBegan) {
+        gCarPlayDragging = YES;
+
+        // From here until release, the overlay watchdog will not touch
+        // the bubble's geometry.
+        gCarPlayBubble.layer.actions =
+            @{
+                @"position": [NSNull null],
+                @"bounds": [NSNull null],
+                @"frame": [NSNull null]
+            };
+    }
+
+    if (state == UIGestureRecognizerStateBegan ||
+        state == UIGestureRecognizerStateChanged) {
+
+        CGPoint finger =
+            [pan locationInView:canvas];
+
+        CGFloat halfW =
+            gCarPlayBubble.bounds.size.width / 2.0;
+
+        CGFloat halfH =
+            gCarPlayBubble.bounds.size.height / 2.0;
+
+        CGFloat W =
+            MAX(canvas.bounds.size.width, 1.0);
+
+        CGFloat H =
+            MAX(canvas.bounds.size.height, 1.0);
+
+        finger.x =
+            MAX(
+                halfW + 4.0,
+                MIN(
+                    W - halfW - 4.0,
+                    finger.x
+                )
+            );
+
+        finger.y =
+            MAX(
+                halfH + 4.0,
+                MIN(
+                    H - halfH - 4.0,
+                    finger.y
+                )
+            );
+
+        [UIView performWithoutAnimation:^{
+            gCarPlayBubble.center =
+                finger;
+        }];
+
+        gCarPlayBubbleCenterRatio =
+            CGPointMake(
+                finger.x / W,
+                finger.y / H
+            );
+
+        gCarPlayBubblePositionLoaded =
             YES;
     }
 
-    CGPoint translation =
-        [pan translationInView:canvas];
-
-    CGPoint center =
-        gCarPlayBubble.center;
-
-    center.x +=
-        translation.x;
-
-    center.y +=
-        translation.y;
-
-    CGFloat halfW =
-        gCarPlayBubble.bounds.size.width / 2.0;
-
-    CGFloat halfH =
-        gCarPlayBubble.bounds.size.height / 2.0;
-
-    CGFloat W =
-        MAX(canvas.bounds.size.width, 1.0);
-
-    CGFloat H =
-        MAX(canvas.bounds.size.height, 1.0);
-
-    center.x =
-        MAX(
-            halfW + 4.0,
-            MIN(
-                W - halfW - 4.0,
-                center.x
-            )
-        );
-
-    center.y =
-        MAX(
-            halfH + 4.0,
-            MIN(
-                H - halfH - 4.0,
-                center.y
-            )
-        );
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    gCarPlayBubble.center =
-        center;
-    [CATransaction commit];
-
-    [pan setTranslation:CGPointZero
-                 inView:canvas];
-
-    gCarPlayBubbleCenterRatio =
-        CGPointMake(
-            center.x / W,
-            center.y / H
-        );
-
-    gCarPlayBubblePositionLoaded =
-        YES;
-
-    if (pan.state ==
-            UIGestureRecognizerStateEnded ||
-        pan.state ==
-            UIGestureRecognizerStateCancelled ||
-        pan.state ==
-            UIGestureRecognizerStateFailed) {
+    if (state == UIGestureRecognizerStateEnded ||
+        state == UIGestureRecognizerStateCancelled ||
+        state == UIGestureRecognizerStateFailed) {
 
         VMLSaveCarPlayBubblePosition();
 
@@ -705,6 +704,18 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         pan.cancelsTouchesInView =
             YES;
 
+        pan.delaysTouchesBegan =
+            NO;
+
+        pan.delaysTouchesEnded =
+            NO;
+
+        pan.minimumNumberOfTouches =
+            1;
+
+        pan.maximumNumberOfTouches =
+            1;
+
         [bubble addGestureRecognizer:pan];
 
 
@@ -715,7 +726,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V13.9.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.0 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -760,7 +771,11 @@ static void VMLOverlayTick(void) {
         return;
     }
 
-    VMLCreateOrRefreshSingleOverlay();
+    // Critical for smooth drag: do zero overlay/layout work while the finger
+    // owns the bubble. Speed notify callbacks still update independently.
+    if (!gCarPlayDragging) {
+        VMLCreateOrRefreshSingleOverlay();
+    }
 
     dispatch_after(
         dispatch_time(
@@ -796,7 +811,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V13.9.1 CLEAN PHONE REMOVAL");
+        VMLLog(@"VML SPEED BUBBLE V14.0 SMOOTH DRAG");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -807,7 +822,7 @@ static void VMLStartOverlayLoop(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V13.9.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.0 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -821,7 +836,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V13.9.1 CARPLAY ACTIVE"
+                @"V14.0 CARPLAY ACTIVE"
             );
 
             return;
