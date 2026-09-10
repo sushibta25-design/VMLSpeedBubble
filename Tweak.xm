@@ -202,14 +202,6 @@ static void VMLUpdateBubble(UIView *bubble) {
     }
 }
 
-static void VMLUpdateAllBubbles(void) {
-    if (gCarPlayDragging)
-        return;
-
-    if (gCarPlayBubble) {
-        VMLUpdateBubble(gCarPlayBubble);
-    }
-}
 
 
 #pragma mark - Speed IPC
@@ -909,7 +901,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.6 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.6.1 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -996,7 +988,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.6 ENCODED SPEED IPC");
+        VMLLog(@"VML SPEED BUBBLE V14.6.1 BUILD FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1009,7 +1001,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V14.6 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.6.1 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1025,7 +1017,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.6 CARPLAY ACTIVE"
+                @"V14.6.1 CARPLAY ACTIVE"
             );
 
             return;
