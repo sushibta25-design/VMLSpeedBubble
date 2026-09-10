@@ -312,6 +312,21 @@ static void VMLSpringBoardReplyWithCachedSpeed(void) {
     if (!VMLIsSpringBoard())
         return;
 
+    if (gCurrentSpeed > 0 &&
+        gCurrentSpeed <= 200) {
+
+        VMLBroadcastEncodedSpeed(
+            gCurrentSpeed
+        );
+
+        VMLTrace(
+            @"TRACE SB REPLAY ANSWER cached=%ld",
+            (long)gCurrentSpeed
+        );
+
+        return;
+    }
+
     if (gSpeedNotifyToken == 0)
         return;
 
@@ -324,7 +339,7 @@ static void VMLSpringBoardReplyWithCachedSpeed(void) {
         );
 
     VMLTrace(
-        @"TRACE SB REPLAY READ token=%d status=%u state=%llu",
+        @"TRACE SB REPLAY FALLBACK token=%d status=%u state=%llu",
         gSpeedNotifyToken,
         status,
         state
@@ -347,7 +362,7 @@ static void VMLSpringBoardReplyWithCachedSpeed(void) {
     );
 
     VMLTrace(
-        @"TRACE SB REPLAY ANSWER speed=%ld",
+        @"TRACE SB REPLAY ANSWER fallback=%ld",
         (long)speed
     );
 }
@@ -416,8 +431,11 @@ static void VMLApplyCarPlayEncodedSpeed(NSInteger speed) {
 }
 
 static void VMLStartEncodedSpeedReceiver(void) {
-    if (!VMLIsCarPlayApp())
+    if (!VMLIsCarPlayApp() &&
+        !VMLIsSpringBoard()) {
+
         return;
+    }
 
     if (gEncodedSpeedTokens)
         return;
@@ -435,8 +453,7 @@ static void VMLStartEncodedSpeedReceiver(void) {
                 (long)speed];
 
         int token = 0;
-        NSInteger capturedSpeed =
-            speed;
+        NSInteger capturedSpeed = speed;
 
         uint32_t status =
             notify_register_dispatch(
@@ -444,9 +461,19 @@ static void VMLStartEncodedSpeedReceiver(void) {
                 &token,
                 dispatch_get_main_queue(),
                 ^(__unused int incomingToken) {
-                    VMLApplyCarPlayEncodedSpeed(
-                        capturedSpeed
-                    );
+                    if (VMLIsSpringBoard()) {
+                        gCurrentSpeed =
+                            capturedSpeed;
+
+                        VMLTrace(
+                            @"TRACE SB ENCODED CACHE speed=%ld",
+                            (long)capturedSpeed
+                        );
+                    } else if (VMLIsCarPlayApp()) {
+                        VMLApplyCarPlayEncodedSpeed(
+                            capturedSpeed
+                        );
+                    }
                 }
             );
 
@@ -457,7 +484,8 @@ static void VMLStartEncodedSpeedReceiver(void) {
     }
 
     VMLTrace(
-        @"CP TRACE ENCODED RECEIVER count=%lu",
+        @"TRACE ENCODED RECEIVER READY bundle=%@ count=%lu",
+        VMLBundle(),
         (unsigned long)gEncodedSpeedTokens.count
     );
 }
@@ -468,10 +496,6 @@ static void VMLSpringBoardRebroadcastTick(void) {
             NO;
         return;
     }
-
-    // Refresh the cached fixed-channel state, then rebroadcast the
-    // latest valid value using the encoded channel.
-    VMLReadSpeed();
 
     if (gCurrentSpeed > 0 &&
         gCurrentSpeed <= 200) {
@@ -1031,7 +1055,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.8 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.9 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1118,7 +1142,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.8 SPRINGBOARD REPLAY");
+        VMLLog(@"VML SPEED BUBBLE V14.9 SB ENCODED CACHE");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1128,11 +1152,12 @@ static void VMLStartOverlayLoop(void) {
             );
 
             VMLStartSpeedReceiver();
+            VMLStartEncodedSpeedReceiver();
             VMLStartSpringBoardReplayResponder();
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V14.8 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.9 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1149,7 +1174,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.8 CARPLAY ACTIVE"
+                @"V14.9 CARPLAY ACTIVE"
             );
 
             return;
