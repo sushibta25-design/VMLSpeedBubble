@@ -340,7 +340,6 @@ static void VMLStartSpeedReceiver(void) {
                 VMLReadSpeed();
 
                 if (VMLIsCarPlayApp()) {
-            VMLStartCarPlaySpeedFallback();
                     VMLCarPlayHardReadSpeed(
                         @"notify-callback"
                     );
@@ -856,7 +855,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V14.2.1 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V14.2.2 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -939,12 +938,53 @@ static void VMLStartOverlayLoop(void) {
     );
 }
 
+
+static BOOL gCarPlaySpeedFallbackRunning = NO;
+
+static void VMLCarPlaySpeedFallbackTick(void) {
+    if (!VMLIsCarPlayApp()) {
+        gCarPlaySpeedFallbackRunning = NO;
+        return;
+    }
+
+    VMLCarPlayHardReadSpeed(
+        @"fallback-1s"
+    );
+
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            1 * NSEC_PER_SEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            VMLCarPlaySpeedFallbackTick();
+        }
+    );
+}
+
+static void VMLStartCarPlaySpeedFallback(void) {
+    if (!VMLIsCarPlayApp() ||
+        gCarPlaySpeedFallbackRunning) {
+
+        return;
+    }
+
+    gCarPlaySpeedFallbackRunning = YES;
+
+    VMLTrace(
+        @"CP TRACE FALLBACK START"
+    );
+
+    VMLCarPlaySpeedFallbackTick();
+}
+
 #pragma mark - Start
 
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V14.2.1 BUILD FIX");
+        VMLLog(@"VML SPEED BUBBLE V14.2.2 FALLBACK FIX");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -955,12 +995,13 @@ static void VMLStartOverlayLoop(void) {
 
             VMLStartSpeedReceiver();
 
-            VMLLog(@"V14.2.1 SPRINGBOARD ACTIVE");
+            VMLLog(@"V14.2.2 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
             VMLStartCarPlaySceneReceiver();
+            VMLStartCarPlaySpeedFallback();
             VMLLog(
                 @"*** CARPLAY.APP INJECTION CONFIRMED V12.6 ***"
             );
@@ -969,7 +1010,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V14.2.1 CARPLAY ACTIVE"
+                @"V14.2.2 CARPLAY ACTIVE"
             );
 
             return;
