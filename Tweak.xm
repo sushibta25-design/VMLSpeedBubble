@@ -453,33 +453,18 @@ static void VMLLogHostDiagnostics(UIView *host, UIWindow *root, NSString *reason
     VMLDumpFullRenderPath(host, root, reason);
 }
 
-static UIView *VMLPreferredRenderTarget(UIView *host, UIWindow *root) {
-    if (!host || !root) return nil;
-
-    UIView *parent = host.superview;
-    if (parent && [NSStringFromClass(parent.class) isEqualToString:@"UIVisualEffectView"]) {
-        return parent;
-    }
-
-    return root;
-}
-
 static void VMLAttachCarPlayBubble(UIView *host, UIWindow *root, NSString *reason) {
-    if (!host || !root) return;
+    if (!root) return;
 
-    UIView *target = VMLPreferredRenderTarget(host, root);
-    if (!target) return;
+    UIView *target = root;
 
     UIView *existing = [target viewWithTag:kCarPlayBubbleTag];
     if (existing) {
         gCarPlayHost = target;
         gCarPlayBubble = existing;
         VMLUpdateBubble(existing);
-
-        VMLLog(@"[render] existing bubble target=%@ frame=%@ reason=%@",
-               NSStringFromClass(target.class),
-               NSStringFromCGRect(target.frame),
-               reason);
+        VMLLog(@"[render] existing ROOT bubble frame=%@ reason=%@",
+               NSStringFromCGRect(existing.frame), reason);
         return;
     }
 
@@ -492,7 +477,6 @@ static void VMLAttachCarPlayBubble(UIView *host, UIWindow *root, NSString *reaso
 
     CGFloat targetH = MAX(1.0, target.bounds.size.height);
     CGFloat targetW = MAX(1.0, target.bounds.size.width);
-
     CGFloat size = MAX(42.0, MIN(58.0, targetH * 0.19));
     CGFloat x = MAX(8.0, MIN(targetW - size - 8.0, targetW * 0.105));
     CGFloat y = MAX(8.0, MIN(targetH - size - 8.0, targetH * 0.50));
@@ -501,6 +485,7 @@ static void VMLAttachCarPlayBubble(UIView *host, UIWindow *root, NSString *reaso
     bubble.frame = CGRectMake(x, y, size, size);
     bubble.hidden = NO;
     bubble.alpha = 1.0;
+    bubble.userInteractionEnabled = NO;
     bubble.layer.hidden = NO;
     bubble.layer.opacity = 1.0;
     bubble.layer.zPosition = CGFLOAT_MAX;
@@ -510,16 +495,16 @@ static void VMLAttachCarPlayBubble(UIView *host, UIWindow *root, NSString *reaso
 
     gCarPlayHost = target;
     gCarPlayBubble = bubble;
-    gAddingOwnView = NO;
 
-    VMLLog(@"*** CARPLAY BUBBLE ADDED V11.5 reason=%@ target=%@ targetFrame=%@ originalHost=%@ root=%@ rootFrame=%@ text=%@ ***",
+    VMLLog(@"*** CARPLAY ROOT BUBBLE ADDED V11.6 reason=%@ root=%@ frame=%@ bounds=%@ originalHost=%@ text=%@ ***",
            reason,
-           NSStringFromClass(target.class),
-           NSStringFromCGRect(target.frame),
-           NSStringFromClass(host.class),
            NSStringFromClass(root.class),
            NSStringFromCGRect(root.frame),
+           NSStringFromCGRect(root.bounds),
+           host ? NSStringFromClass(host.class) : @"nil",
            VMLSpeedText());
+
+    gAddingOwnView = NO;
 }
 
 static void VMLProcessCarPlayWindow(UIWindow *window, NSString *reason) {
@@ -592,7 +577,7 @@ static void VMLScannerTick(void) {
 static void VMLStartScanner(void) {
     if (gScannerStarted) return;
     gScannerStarted = YES;
-    VMLLog(@"[scanner] V11.5 scanner started");
+    VMLLog(@"[scanner] V11.6 scanner started");
     dispatch_async(dispatch_get_main_queue(), ^{ VMLScannerTick(); });
 }
 
@@ -622,7 +607,7 @@ static void VMLStartScanner(void) {
         NSString *process = NSProcessInfo.processInfo.processName ?: @"";
 
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V11.5 PARENT/ROOT RENDER");
+        VMLLog(@"VML SPEED BUBBLE V11.6 ROOT ONLY RENDER");
         VMLLog(@"bundle=%@ process=%@", bundle, process);
         VMLLog(@"========================================");
 
