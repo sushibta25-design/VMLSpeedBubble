@@ -2,7 +2,19 @@
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <notify.h>
-#import <objc/message.h>
+
+
+@interface VMLPassthroughWindow : UIWindow
+@end
+
+@implementation VMLPassthroughWindow
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return NO;
+}
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    return nil;
+}
+@end
 
 #pragma mark - Globals
 
@@ -10,13 +22,10 @@ static NSInteger gCurrentSpeed = 0;
 static int gSpeedNotifyToken = 0;
 
 static UIWindow *gPhoneWindow = nil;
+static UIWindow *gCarPlayOverlayWindow = nil;
+static UIView *gCarPlayBubble = nil;
 
-static __weak UIViewController *gLastNativeController = nil;
-static __weak UIView *gNativeHost = nil;
-static UIView *gNativeBubble = nil;
-
-static BOOL gWatchdogRunning = NO;
-static BOOL gCarPlayShowsVML = NO;
+static BOOL gOverlayLoopRunning = NO;
 
 static const NSInteger kPhoneBubbleTag = 990099;
 static const NSInteger kCarPlayBubbleTag = 990199;
@@ -33,7 +42,7 @@ static void VMLLog(NSString *format, ...) {
 
     va_end(args);
 
-    NSLog(@"[VMLV12.5] %@", msg);
+    NSLog(@"[VMLV12.3] %@", msg);
 
     NSString *line =
         [NSString stringWithFormat:@"%@\n", msg];
@@ -94,14 +103,12 @@ static UIView *VMLMakeBubble(NSInteger tag, CGFloat size) {
     label.autoresizingMask =
         UIViewAutoresizingFlexibleWidth |
         UIViewAutoresizingFlexibleHeight;
-
     label.text = VMLSpeedText();
     label.textColor = UIColor.blackColor;
     label.textAlignment = NSTextAlignmentCenter;
     label.font =
         [UIFont systemFontOfSize:size * 0.40
                          weight:UIFontWeightBold];
-
     label.adjustsFontSizeToFitWidth = YES;
     label.minimumScaleFactor = 0.5;
 
@@ -121,13 +128,13 @@ static void VMLUpdateBubble(UIView *bubble) {
         label.text = VMLSpeedText();
     }
 
-    bubble.hidden = gCarPlayShowsVML;
+    bubble.hidden = NO;
     bubble.alpha = 1.0;
-    bubble.layer.hidden = gCarPlayShowsVML;
+    bubble.layer.hidden = NO;
     bubble.layer.opacity = 1.0;
     bubble.layer.zPosition = CGFLOAT_MAX;
 
-    if (bubble.superview && !gCarPlayShowsVML) {
+    if (bubble.superview) {
         [bubble.superview bringSubviewToFront:bubble];
     }
 }
@@ -138,17 +145,12 @@ static void VMLUpdateAllBubbles(void) {
             [gPhoneWindow viewWithTag:kPhoneBubbleTag];
 
         if (phoneBubble) {
-            UILabel *label =
-                (UILabel *)[phoneBubble viewWithTag:kLabelTag];
-
-            if (label) {
-                label.text = VMLSpeedText();
-            }
+            VMLUpdateBubble(phoneBubble);
         }
     }
 
-    if (gNativeBubble) {
-        VMLUpdateBubble(gNativeBubble);
+    if (gCarPlayBubble) {
+        VMLUpdateBubble(gCarPlayBubble);
     }
 }
 
@@ -166,12 +168,15 @@ static void VMLReadSpeed(void) {
     if (status != NOTIFY_STATUS_OK)
         return;
 
-    NSInteger speed =
-        (NSInteger)state;
+    NSInteger speed = (NSInteger)state;
 
-    // RuntimeSniffer V12.3+ never publishes 0, so state should remain the
-    // most recent valid speed limit.
+    // V12.3: only a valid limit can replace the current displayed value.
     if (speed <= 0 || speed > 200) {
+        VMLLog(
+            @"[speed] state=%ld -> keep current=%ld",
+            (long)speed,
+            (long)gCurrentSpeed
+        );
         return;
     }
 
@@ -199,9 +204,7 @@ static void VMLStartSpeedReceiver(void) {
             &token,
             dispatch_get_main_queue(),
             ^(int incomingToken) {
-                gSpeedNotifyToken =
-                    incomingToken;
-
+                gSpeedNotifyToken = incomingToken;
                 VMLReadSpeed();
             }
         );
@@ -222,8 +225,11 @@ static void VMLStartSpeedReceiver(void) {
         VMLBundle()
     );
 
+    // Read immediately; RuntimeSniffer no longer replaces the shared
+    // state with 0, so this can return the latest valid limit at once.
     VMLReadSpeed();
 }
+
 
 #pragma mark - Phone bubble
 
@@ -258,8 +264,10 @@ static void VMLCreatePhoneBubble(void) {
     UIWindowScene *scene =
         VMLPhoneScene();
 
-    if (!scene)
+    if (!scene) {
+        VMLLog(@"PHONE SCENE NOT FOUND");
         return;
+    }
 
     CGFloat size = 64.0;
 
@@ -275,8 +283,7 @@ static void VMLCreatePhoneBubble(void) {
     gPhoneWindow.windowLevel =
         UIWindowLevelAlert + 1000.0;
 
-    gPhoneWindow.userInteractionEnabled =
-        NO;
+    gPhoneWindow.userInteractionEnabled = NO;
 
     UIViewController *vc =
         [UIViewController new];
@@ -284,24 +291,18 @@ static void VMLCreatePhoneBubble(void) {
     vc.view.backgroundColor =
         UIColor.clearColor;
 
-    vc.view.userInteractionEnabled =
-        NO;
+    vc.view.userInteractionEnabled = NO;
 
-    gPhoneWindow.rootViewController =
-        vc;
+    gPhoneWindow.rootViewController = vc;
 
     UIView *bubble =
-        VMLMakeBubble(
-            kPhoneBubbleTag,
-            size
-        );
-
-    bubble.hidden = NO;
-    bubble.layer.hidden = NO;
+        VMLMakeBubble(kPhoneBubbleTag, size);
 
     [vc.view addSubview:bubble];
 
     gPhoneWindow.hidden = NO;
+
+    VMLUpdateBubble(bubble);
 
     VMLLog(
         @"*** PHONE BUBBLE CREATED text=%@ ***",
@@ -309,201 +310,35 @@ static void VMLCreatePhoneBubble(void) {
     );
 }
 
-#pragma mark - Native CarPlay host discovery
+#pragma mark - CarPlay Scene
 
-static BOOL VMLClassLooksNativeCarPlayController(NSString *name) {
-    if (!name.length)
+static BOOL VMLSceneLooksCarPlay(UIWindowScene *scene) {
+    if (!scene)
         return NO;
 
-    NSArray<NSString *> *tokens =
-        @[
-            @"CarPlay",
-            @"Dashboard",
-            @"AppDock",
-            @"DockViewController",
-            @"DBDashboardRootViewController",
-            @"CARAppDockViewController"
-        ];
+    NSString *role =
+        scene.session.role ?: @"";
 
-    for (NSString *token in tokens) {
-        if ([name containsString:token]) {
-            return YES;
-        }
+    if ([role localizedCaseInsensitiveContainsString:@"CarPlay"]) {
+        return YES;
     }
 
-    return NO;
-}
+    CGSize size =
+        scene.screen.bounds.size;
 
-static UIView *VMLCallViewSelector(
-    id obj,
-    NSString *selectorName
-) {
-    if (!obj || !selectorName.length)
-        return nil;
+    // Fallback for this iOS/CarPlay implementation where role can be
+    // _UIScreenBasedSceneSession rather than a literal CarPlay role.
+    if (size.width > size.height &&
+        size.width >= 300.0 &&
+        size.height <= 500.0) {
 
-    SEL sel =
-        NSSelectorFromString(selectorName);
-
-    if (![obj respondsToSelector:sel])
-        return nil;
-
-    id result =
-        ((id (*)(id, SEL))objc_msgSend)(
-            obj,
-            sel
-        );
-
-    if ([result isKindOfClass:UIView.class]) {
-        return (UIView *)result;
-    }
-
-    return nil;
-}
-
-static UIView *VMLPreferredNativeHost(
-    UIViewController *vc
-) {
-    if (!vc)
-        return nil;
-
-    NSArray<NSString *> *selectors =
-        @[
-            @"dockModeHostViewCreatingIfNeeded",
-            @"splitHostView",
-            @"host"
-        ];
-
-    for (NSString *selectorName in selectors) {
-        UIView *view =
-            VMLCallViewSelector(
-                vc,
-                selectorName
-            );
-
-        if (view && view.window) {
-            VMLLog(
-                @"[native] selector=%@ host=%@ frame=%@",
-                selectorName,
-                NSStringFromClass(view.class),
-                NSStringFromCGRect(view.frame)
-            );
-
-            return view;
-        }
-    }
-
-    if (vc.view && vc.view.window) {
-        return vc.view;
-    }
-
-    return nil;
-}
-
-#pragma mark - CarPlay foreground detection
-
-static NSString *VMLStringFromSelector(
-    id obj,
-    NSString *selectorName
-) {
-    if (!obj || !selectorName.length)
-        return nil;
-
-    SEL sel =
-        NSSelectorFromString(selectorName);
-
-    if (![obj respondsToSelector:sel])
-        return nil;
-
-    id result =
-        ((id (*)(id, SEL))objc_msgSend)(
-            obj,
-            sel
-        );
-
-    if ([result isKindOfClass:NSString.class]) {
-        return (NSString *)result;
-    }
-
-    return nil;
-}
-
-static BOOL VMLObjectReferencesVietMap(id obj) {
-    if (!obj)
-        return NO;
-
-    NSArray<NSString *> *selectors =
-        @[
-            @"bundleIdentifier",
-            @"applicationBundleIdentifier",
-            @"clientBundleIdentifier",
-            @"sceneIdentifier"
-        ];
-
-    for (NSString *selectorName in selectors) {
-        NSString *value =
-            VMLStringFromSelector(
-                obj,
-                selectorName
-            );
-
-        if ([value containsString:@"vn.vietmap.live"]) {
-            return YES;
-        }
-    }
-
-    NSString *description =
-        [obj description];
-
-    if ([description containsString:@"vn.vietmap.live"]) {
         return YES;
     }
 
     return NO;
 }
 
-static BOOL VMLControllerTreeReferencesVietMap(
-    UIViewController *vc,
-    NSInteger depth
-) {
-    if (!vc || depth > 8)
-        return NO;
-
-    if (VMLObjectReferencesVietMap(vc))
-        return YES;
-
-    if (VMLObjectReferencesVietMap(vc.view))
-        return YES;
-
-    if (vc.presentedViewController &&
-        VMLControllerTreeReferencesVietMap(
-            vc.presentedViewController,
-            depth + 1
-        )) {
-
-        return YES;
-    }
-
-    for (UIViewController *child
-         in vc.childViewControllers) {
-
-        if (VMLControllerTreeReferencesVietMap(
-                child,
-                depth + 1
-            )) {
-
-            return YES;
-        }
-    }
-
-    return NO;
-}
-
-static void VMLRefreshCarPlayForegroundState(void) {
-    if (!VMLIsCarPlayApp())
-        return;
-
-    BOOL foundVietMap = NO;
-
+static UIWindowScene *VMLFindCarPlayScene(void) {
     UIApplication *app =
         UIApplication.sharedApplication;
 
@@ -514,103 +349,77 @@ static void VMLRefreshCarPlayForegroundState(void) {
         UIWindowScene *ws =
             (UIWindowScene *)scene;
 
-        for (UIWindow *window in ws.windows) {
-            UIViewController *root =
-                window.rootViewController;
-
-            if (VMLControllerTreeReferencesVietMap(
-                    root,
-                    0
-                )) {
-
-                foundVietMap = YES;
-                break;
-            }
+        if (VMLSceneLooksCarPlay(ws)) {
+            return ws;
         }
-
-        if (foundVietMap)
-            break;
     }
 
-    if (gCarPlayShowsVML != foundVietMap) {
-        gCarPlayShowsVML =
-            foundVietMap;
-
-        VMLLog(
-            @"*** CARPLAY SHOWS VIETMAP = %d ***",
-            gCarPlayShowsVML
-        );
-    }
-
-    if (gNativeBubble) {
-        VMLUpdateBubble(gNativeBubble);
-    }
+    return nil;
 }
 
-#pragma mark - Native bubble
+#pragma mark - Single CarPlay Overlay
 
-static void VMLAttachNativeBubble(
-    UIView *host,
-    NSString *reason
-) {
-    if (!VMLIsCarPlayApp() ||
-        !host ||
-        !host.window) {
+static void VMLDestroyOldOverlayIfNeeded(UIWindowScene *wantedScene) {
+    if (!gCarPlayOverlayWindow)
+        return;
 
+    if (gCarPlayOverlayWindow.windowScene == wantedScene)
+        return;
+
+    gCarPlayOverlayWindow.hidden = YES;
+    gCarPlayOverlayWindow.rootViewController = nil;
+    gCarPlayOverlayWindow = nil;
+    gCarPlayBubble = nil;
+
+    VMLLog(@"[overlay] discarded stale overlay window");
+}
+
+static void VMLCreateOrRefreshSingleOverlay(void) {
+    if (!VMLIsCarPlayApp())
+        return;
+
+    // Pull the latest shared valid speed every tick.
+    VMLReadSpeed();
+
+    UIWindowScene *scene =
+        VMLFindCarPlayScene();
+
+    if (!scene) {
+        VMLLog(@"[overlay] no CarPlay scene");
         return;
     }
 
-    if (gNativeBubble &&
-        gNativeBubble.superview == host) {
+    VMLDestroyOldOverlayIfNeeded(scene);
 
-        VMLUpdateBubble(gNativeBubble);
-        return;
+    CGRect sceneBounds =
+        scene.coordinateSpace.bounds;
+
+    if (CGRectIsEmpty(sceneBounds)) {
+        sceneBounds =
+            scene.screen.bounds;
     }
 
-    if (gNativeBubble &&
-        gNativeBubble.superview) {
+    CGFloat sceneW =
+        MAX(sceneBounds.size.width, 1.0);
 
-        [gNativeBubble removeFromSuperview];
-        gNativeBubble = nil;
-    }
-
-    // Also remove stale VML bubble tags from this exact native host.
-    NSArray<UIView *> *children =
-        [host.subviews copy];
-
-    for (UIView *child in children) {
-        if (child.tag == kCarPlayBubbleTag) {
-            [child removeFromSuperview];
-        }
-    }
-
-    CGFloat W =
-        MAX(host.bounds.size.width, 1.0);
-
-    CGFloat H =
-        MAX(host.bounds.size.height, 1.0);
+    CGFloat sceneH =
+        MAX(sceneBounds.size.height, 1.0);
 
     CGFloat size =
         MAX(
             42.0,
             MIN(
                 56.0,
-                H * 0.20
+                sceneH * 0.20
             )
-        );
-
-    UIView *bubble =
-        VMLMakeBubble(
-            kCarPlayBubbleTag,
-            size
         );
 
     CGFloat x =
         MAX(
             8.0,
             MIN(
-                W - size - 8.0,
-                W * 0.08
+                sceneW - size - 8.0,
+                sceneW * 0.08
             )
         );
 
@@ -618,12 +427,12 @@ static void VMLAttachNativeBubble(
         MAX(
             8.0,
             MIN(
-                H - size - 8.0,
-                H * 0.50
+                sceneH - size - 8.0,
+                sceneH * 0.50
             )
         );
 
-    bubble.frame =
+    CGRect bubbleWindowFrame =
         CGRectMake(
             x,
             y,
@@ -631,55 +440,111 @@ static void VMLAttachNativeBubble(
             size
         );
 
-    bubble.userInteractionEnabled =
-        NO;
+    if (!gCarPlayOverlayWindow) {
+        gCarPlayOverlayWindow =
+            [[VMLPassthroughWindow alloc]
+                initWithWindowScene:scene];
 
-    bubble.layer.zPosition =
-        CGFLOAT_MAX;
+        gCarPlayOverlayWindow.backgroundColor =
+            UIColor.clearColor;
 
-    [host addSubview:bubble];
+        // Tiny non-key window only around the sign.
+        gCarPlayOverlayWindow.windowLevel =
+            UIWindowLevelAlert + 100.0;
 
-    if (!gCarPlayShowsVML) {
-        [host bringSubviewToFront:bubble];
+        gCarPlayOverlayWindow.userInteractionEnabled =
+            NO;
+
+        UIViewController *vc =
+            [UIViewController new];
+
+        vc.view.backgroundColor =
+            UIColor.clearColor;
+
+        vc.view.userInteractionEnabled =
+            NO;
+
+        gCarPlayOverlayWindow.rootViewController =
+            vc;
+
+        UIView *bubble =
+            VMLMakeBubble(
+                kCarPlayBubbleTag,
+                size
+            );
+
+        bubble.frame =
+            CGRectMake(
+                0,
+                0,
+                size,
+                size
+            );
+
+        bubble.userInteractionEnabled =
+            NO;
+
+        [vc.view addSubview:bubble];
+
+        gCarPlayBubble =
+            bubble;
+
+        VMLLog(
+            @"*** CLEAN CARPLAY OVERLAY CREATED V12.6 scene=%@ frame=%@ ***",
+            NSStringFromCGRect(sceneBounds),
+            NSStringFromCGRect(bubbleWindowFrame)
+        );
     }
 
-    gNativeHost = host;
-    gNativeBubble = bubble;
+    gCarPlayOverlayWindow.frame =
+        bubbleWindowFrame;
 
-    VMLUpdateBubble(gNativeBubble);
+    gCarPlayOverlayWindow.rootViewController.view.frame =
+        CGRectMake(
+            0,
+            0,
+            size,
+            size
+        );
+
+    if (gCarPlayBubble) {
+        gCarPlayBubble.frame =
+            CGRectMake(
+                0,
+                0,
+                size,
+                size
+            );
+
+        VMLUpdateBubble(
+            gCarPlayBubble
+        );
+    }
+
+    // Always visible. No dependency on VietMap foreground state,
+    // CarBridge, or DuoDash.
+    gCarPlayOverlayWindow.hidden =
+        NO;
+
+    gCarPlayOverlayWindow.alpha =
+        1.0;
 
     VMLLog(
-        @"*** NATIVE CARPLAY BUBBLE ADDED V12.5 reason=%@ host=%@ frame=%@ hiddenForVML=%d speed=%ld ***",
-        reason,
-        NSStringFromClass(host.class),
-        NSStringFromCGRect(host.frame),
-        gCarPlayShowsVML,
+        @"[overlay] V12.6 frame=%@ speed=%ld",
+        NSStringFromCGRect(
+            gCarPlayOverlayWindow.frame
+        ),
         (long)gCurrentSpeed
     );
 }
 
-static void VMLHandleNativeController(
-    UIViewController *vc,
-    NSString *reason
-) {
-    if (!VMLIsCarPlayApp() ||
-        !vc) {
-
+static void VMLOverlayTick(void) {
+    if (!VMLIsCarPlayApp()) {
+        gOverlayLoopRunning = NO;
         return;
     }
 
-    NSString *name =
-        NSStringFromClass(vc.class);
-
-    if (!VMLClassLooksNativeCarPlayController(
-            name
-        )) {
-
-        return;
-    }
-
-    gLastNativeController =
-        vc;
+    VMLCreateOrRefreshSingleOverlay();
 
     dispatch_after(
         dispatch_time(
@@ -688,141 +553,46 @@ static void VMLHandleNativeController(
         ),
         dispatch_get_main_queue(),
         ^{
-            VMLRefreshCarPlayForegroundState();
-
-            UIView *host =
-                VMLPreferredNativeHost(vc);
-
-            if (host) {
-                VMLAttachNativeBubble(
-                    host,
-                    [NSString stringWithFormat:
-                        @"%@:%@",
-                        reason,
-                        name]
-                );
-            }
+            VMLOverlayTick();
         }
     );
 }
 
-#pragma mark - Persistent host watchdog
-
-static void VMLWatchdogTick(void) {
-    if (!VMLIsCarPlayApp()) {
-        gWatchdogRunning = NO;
-        return;
-    }
-
-    VMLReadSpeed();
-    VMLRefreshCarPlayForegroundState();
-
-    UIViewController *vc =
-        gLastNativeController;
-
-    UIView *wantedHost =
-        VMLPreferredNativeHost(vc);
-
-    BOOL bubbleAlive =
-        gNativeBubble &&
-        gNativeBubble.superview &&
-        gNativeBubble.window;
-
-    BOOL wrongHost =
-        wantedHost &&
-        gNativeBubble &&
-        gNativeBubble.superview != wantedHost;
-
-    if (wantedHost &&
-        (!bubbleAlive || wrongHost)) {
-
-        VMLLog(
-            @"[watchdog] reattach bubble alive=%d wrongHost=%d",
-            bubbleAlive,
-            wrongHost
-        );
-
-        VMLAttachNativeBubble(
-            wantedHost,
-            @"watchdog"
-        );
-    } else if (bubbleAlive) {
-        VMLUpdateBubble(
-            gNativeBubble
-        );
-    }
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            500 * NSEC_PER_MSEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLWatchdogTick();
-        }
-    );
-}
-
-static void VMLStartWatchdog(void) {
+static void VMLStartOverlayLoop(void) {
     if (!VMLIsCarPlayApp() ||
-        gWatchdogRunning) {
+        gOverlayLoopRunning) {
 
         return;
     }
 
-    gWatchdogRunning = YES;
+    gOverlayLoopRunning = YES;
 
     VMLLog(
-        @"[watchdog] V12.5 native host watchdog started"
+        @"[overlay] V12.6 CLEAN SMALL-WINDOW LOOP STARTED"
     );
 
     dispatch_async(
         dispatch_get_main_queue(),
         ^{
-            VMLWatchdogTick();
+            VMLOverlayTick();
         }
     );
 }
 
-#pragma mark - Hooks
-
-%hook UIViewController
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-
-    VMLHandleNativeController(
-        self,
-        @"viewDidAppear"
-    );
-}
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-
-    VMLHandleNativeController(
-        self,
-        @"viewDidLayoutSubviews"
-    );
-}
-
-%end
-
-#pragma mark - Startup
+#pragma mark - Start
 
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V12.5 SAFE NATIVE HOST");
-        VMLLog(
-            @"bundle=%@ process=%@",
-            VMLBundle(),
-            VMLProcess()
-        );
+        VMLLog(@"VML SPEED BUBBLE V12.6 CLEAN GLOBAL OVERLAY");
+        VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
         if (VMLIsSpringBoard()) {
+            VMLLog(
+                @"*** SPRINGBOARD INJECTION CONFIRMED V12.6 ***"
+            );
+
             VMLStartSpeedReceiver();
 
             dispatch_after(
@@ -836,23 +606,20 @@ static void VMLStartWatchdog(void) {
                 }
             );
 
-            VMLLog(
-                @"V12.5 SPRINGBOARD ACTIVE"
-            );
-
+            VMLLog(@"V12.6 SPRINGBOARD ACTIVE");
             return;
         }
 
         if (VMLIsCarPlayApp()) {
             VMLLog(
-                @"*** CARPLAY.APP INJECTION CONFIRMED V12.5 ***"
+                @"*** CARPLAY.APP INJECTION CONFIRMED V12.6 ***"
             );
 
             VMLStartSpeedReceiver();
-            VMLStartWatchdog();
+            VMLStartOverlayLoop();
 
             VMLLog(
-                @"V12.5 CARPLAY ACTIVE"
+                @"V12.6 CARPLAY ACTIVE"
             );
 
             return;
