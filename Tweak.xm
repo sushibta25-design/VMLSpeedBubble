@@ -618,7 +618,7 @@ static void VMLAttachOverspeedViewIfNeeded(void) {
 
         flash.backgroundColor =
             [UIColor colorWithRed:1.0
-                            green:0.0
+                            green:0.02
                              blue:0.0
                             alpha:1.0];
 
@@ -666,7 +666,7 @@ static void VMLOverspeedFlashTick(void) {
 
             [UIView performWithoutAnimation:^{
                 gOverspeedFlashView.alpha =
-                    gOverspeedFlashOn ? 0.38 : 0.10;
+                    gOverspeedFlashOn ? 0.82 : 0.28;
             }];
         } else {
             gOverspeedFlashOn =
@@ -1254,7 +1254,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V15.2 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V15.3 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1343,7 +1343,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.2 SOS OVERSPEED");
+        VMLLog(@"VML SPEED BUBBLE V15.3 SOS BRIGHT RED");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1358,7 +1358,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V15.2 SPRINGBOARD ACTIVE");
+            VMLLog(@"V15.3 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1376,7 +1376,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V15.2 CARPLAY ACTIVE"
+                @"V15.3 CARPLAY ACTIVE"
             );
 
             return;
