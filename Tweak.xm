@@ -52,6 +52,12 @@ static BOOL gOverspeedActive = NO;
 static BOOL gOverspeedFlashOn = NO;
 static UIView *gOverspeedFlashView = nil;
 static BOOL gOverspeedFlashLoopRunning = NO;
+static UIView *gOverspeedBannerContainer = nil;
+static UIView *gOverspeedBannerPanel = nil;
+static UIImageView *gOverspeedFuelIcon = nil;
+static UILabel *gOverspeedTitleLabel = nil;
+static UILabel *gOverspeedSubtitleLabel = nil;
+static NSMutableArray<UIView *> *gOverspeedWarningMarks = nil;
 static void VMLBroadcastEncodedSpeed(NSInteger speed);
 static BOOL gCarPlayHasEncodedSpeed = NO;
 static void VMLTrace(NSString *format, ...);
@@ -594,6 +600,551 @@ static void VMLStartCarPlayReplayRequester(void) {
 
 #pragma mark - SOS overspeed full-screen flash
 
+
+static UIColor *VMLOverspeedYellowColor(void) {
+    return [UIColor colorWithRed:1.0
+                           green:0.86
+                            blue:0.0
+                           alpha:1.0];
+}
+
+static UIColor *VMLOverspeedBlueColor(void) {
+    return [UIColor colorWithRed:0.0
+                           green:0.66
+                            blue:1.0
+                           alpha:1.0];
+}
+
+static void VMLApplyOverspeedBannerColor(UIColor *color) {
+    if (!color)
+        return;
+
+    if (gOverspeedBannerPanel) {
+        gOverspeedBannerPanel.layer.borderColor =
+            color.CGColor;
+
+        gOverspeedBannerPanel.layer.shadowColor =
+            color.CGColor;
+    }
+
+    if (gOverspeedFuelIcon) {
+        gOverspeedFuelIcon.tintColor =
+            color;
+    }
+
+    if (gOverspeedTitleLabel) {
+        gOverspeedTitleLabel.textColor =
+            color;
+    }
+
+    if (gOverspeedSubtitleLabel) {
+        gOverspeedSubtitleLabel.textColor =
+            color;
+    }
+
+    for (UIView *mark in gOverspeedWarningMarks) {
+        mark.backgroundColor =
+            color;
+
+        mark.layer.shadowColor =
+            color.CGColor;
+    }
+}
+
+static void VMLLayoutOverspeedBanner(void) {
+    if (!gOverspeedBannerContainer ||
+        !gOverspeedBannerPanel ||
+        !gOverspeedBannerContainer.superview) {
+
+        return;
+    }
+
+    UIView *canvas =
+        gOverspeedBannerContainer.superview;
+
+    CGFloat W =
+        MAX(CGRectGetWidth(canvas.bounds), 1.0);
+
+    CGFloat H =
+        MAX(CGRectGetHeight(canvas.bounds), 1.0);
+
+    // Responsive sizing for different CarPlay logical resolutions.
+    // Width is primarily screen-based; height follows screen height,
+    // with aspect safeguards so very wide/tall displays stay balanced.
+    CGFloat panelW =
+        MIN(
+            W * 0.82,
+            H * 3.55
+        );
+
+    panelW =
+        MAX(
+            W * 0.58,
+            panelW
+        );
+
+    CGFloat panelH =
+        MIN(
+            H * 0.48,
+            panelW * 0.30
+        );
+
+    panelH =
+        MAX(
+            H * 0.30,
+            panelH
+        );
+
+    CGFloat sideSpace =
+        MIN(
+            W * 0.065,
+            panelH * 0.50
+        );
+
+    CGFloat containerW =
+        MIN(
+            W * 0.94,
+            panelW + sideSpace * 2.0
+        );
+
+    CGFloat containerH =
+        panelH;
+
+    gOverspeedBannerContainer.bounds =
+        CGRectMake(
+            0.0,
+            0.0,
+            containerW,
+            containerH
+        );
+
+    gOverspeedBannerContainer.center =
+        CGPointMake(
+            CGRectGetMidX(canvas.bounds),
+            CGRectGetMidY(canvas.bounds)
+        );
+
+    CGFloat panelX =
+        (containerW - panelW) / 2.0;
+
+    gOverspeedBannerPanel.frame =
+        CGRectMake(
+            panelX,
+            0.0,
+            panelW,
+            panelH
+        );
+
+    CGFloat radius =
+        MAX(
+            10.0,
+            panelH * 0.14
+        );
+
+    CGFloat borderWidth =
+        MAX(
+            3.0,
+            panelH * 0.035
+        );
+
+    gOverspeedBannerPanel.layer.cornerRadius =
+        radius;
+
+    gOverspeedBannerPanel.layer.borderWidth =
+        borderWidth;
+
+    gOverspeedBannerPanel.layer.shadowOpacity =
+        0.70;
+
+    gOverspeedBannerPanel.layer.shadowRadius =
+        MAX(
+            4.0,
+            panelH * 0.08
+        );
+
+    gOverspeedBannerPanel.layer.shadowOffset =
+        CGSizeZero;
+
+    CGFloat iconSide =
+        panelH * 0.58;
+
+    CGFloat leftPadding =
+        panelH * 0.18;
+
+    if (gOverspeedFuelIcon) {
+        gOverspeedFuelIcon.frame =
+            CGRectMake(
+                leftPadding,
+                (panelH - iconSide) / 2.0,
+                iconSide,
+                iconSide
+            );
+    }
+
+    CGFloat textX =
+        leftPadding +
+        iconSide +
+        panelH * 0.13;
+
+    CGFloat rightPadding =
+        panelH * 0.16;
+
+    CGFloat textW =
+        MAX(
+            10.0,
+            panelW - textX - rightPadding
+        );
+
+    CGFloat titleH =
+        panelH * 0.43;
+
+    CGFloat subtitleH =
+        panelH * 0.35;
+
+    CGFloat totalTextH =
+        titleH + subtitleH;
+
+    CGFloat textY =
+        (panelH - totalTextH) / 2.0;
+
+    if (gOverspeedTitleLabel) {
+        gOverspeedTitleLabel.frame =
+            CGRectMake(
+                textX,
+                textY,
+                textW,
+                titleH
+            );
+
+        gOverspeedTitleLabel.font =
+            [UIFont systemFontOfSize:
+                MAX(
+                    14.0,
+                    panelH * 0.30
+                )
+                             weight:UIFontWeightHeavy];
+    }
+
+    if (gOverspeedSubtitleLabel) {
+        gOverspeedSubtitleLabel.frame =
+            CGRectMake(
+                textX,
+                textY + titleH,
+                textW,
+                subtitleH
+            );
+
+        gOverspeedSubtitleLabel.font =
+            [UIFont systemFontOfSize:
+                MAX(
+                    12.0,
+                    panelH * 0.245
+                )
+                             weight:UIFontWeightBold];
+    }
+
+    if (gOverspeedWarningMarks.count == 4) {
+        CGFloat markW =
+            MAX(
+                7.0,
+                panelH * 0.17
+            );
+
+        CGFloat markH =
+            MAX(
+                4.0,
+                panelH * 0.055
+            );
+
+        CGFloat outerGap =
+            MAX(
+                4.0,
+                panelH * 0.065
+            );
+
+        CGFloat verticalOffset =
+            panelH * 0.17;
+
+        CGFloat leftCenterX =
+            panelX - outerGap - markW / 2.0;
+
+        CGFloat rightCenterX =
+            panelX + panelW + outerGap + markW / 2.0;
+
+        CGFloat centerY =
+            panelH / 2.0;
+
+        NSArray<NSValue *> *centers =
+            @[
+                [NSValue valueWithCGPoint:
+                    CGPointMake(
+                        leftCenterX,
+                        centerY - verticalOffset
+                    )],
+                [NSValue valueWithCGPoint:
+                    CGPointMake(
+                        leftCenterX,
+                        centerY + verticalOffset
+                    )],
+                [NSValue valueWithCGPoint:
+                    CGPointMake(
+                        rightCenterX,
+                        centerY - verticalOffset
+                    )],
+                [NSValue valueWithCGPoint:
+                    CGPointMake(
+                        rightCenterX,
+                        centerY + verticalOffset
+                    )]
+            ];
+
+        for (NSUInteger i = 0;
+             i < gOverspeedWarningMarks.count;
+             i++) {
+
+            UIView *mark =
+                gOverspeedWarningMarks[i];
+
+            mark.bounds =
+                CGRectMake(
+                    0.0,
+                    0.0,
+                    markW,
+                    markH
+                );
+
+            mark.center =
+                centers[i].CGPointValue;
+
+            mark.layer.cornerRadius =
+                markH / 2.0;
+
+            mark.layer.shadowOpacity =
+                0.75;
+
+            mark.layer.shadowRadius =
+                MAX(
+                    2.0,
+                    panelH * 0.04
+                );
+
+            mark.layer.shadowOffset =
+                CGSizeZero;
+
+            CGFloat angle =
+                (i == 0 || i == 3)
+                    ? -0.42
+                    : 0.42;
+
+            mark.transform =
+                CGAffineTransformMakeRotation(
+                    angle
+                );
+        }
+    }
+}
+
+static void VMLAttachOverspeedBannerIfNeeded(void) {
+    if (!VMLIsCarPlayApp() ||
+        !gCarPlayOverlayWindow ||
+        !gCarPlayOverlayWindow.rootViewController) {
+
+        return;
+    }
+
+    UIView *canvas =
+        gCarPlayOverlayWindow.rootViewController.view;
+
+    if (!canvas)
+        return;
+
+    if (!gOverspeedBannerContainer) {
+        UIView *container =
+            [[UIView alloc] initWithFrame:CGRectZero];
+
+        container.backgroundColor =
+            UIColor.clearColor;
+
+        container.userInteractionEnabled =
+            NO;
+
+        container.hidden =
+            YES;
+
+        container.alpha =
+            0.0;
+
+        UIView *panel =
+            [[UIView alloc] initWithFrame:CGRectZero];
+
+        panel.backgroundColor =
+            UIColor.blackColor;
+
+        panel.userInteractionEnabled =
+            NO;
+
+        panel.clipsToBounds =
+            NO;
+
+        [container addSubview:panel];
+
+        UIImageView *fuelIcon =
+            [[UIImageView alloc] initWithFrame:CGRectZero];
+
+        UIImage *fuelImage =
+            nil;
+
+        if (@available(iOS 13.0, *)) {
+            fuelImage =
+                [UIImage systemImageNamed:@"fuelpump.fill"];
+        }
+
+        fuelIcon.image =
+            fuelImage;
+
+        fuelIcon.contentMode =
+            UIViewContentModeScaleAspectFit;
+
+        [panel addSubview:fuelIcon];
+
+        UILabel *title =
+            [[UILabel alloc] initWithFrame:CGRectZero];
+
+        title.text =
+            @"XĂNG ĐANG TĂNG";
+
+        title.textAlignment =
+            NSTextAlignmentCenter;
+
+        title.adjustsFontSizeToFitWidth =
+            YES;
+
+        title.minimumScaleFactor =
+            0.68;
+
+        title.numberOfLines =
+            1;
+
+        [panel addSubview:title];
+
+        UILabel *subtitle =
+            [[UILabel alloc] initWithFrame:CGRectZero];
+
+        subtitle.text =
+            @"GIẢM TỐC ĐỘ ĐÊ!";
+
+        subtitle.textAlignment =
+            NSTextAlignmentCenter;
+
+        subtitle.adjustsFontSizeToFitWidth =
+            YES;
+
+        subtitle.minimumScaleFactor =
+            0.68;
+
+        subtitle.numberOfLines =
+            1;
+
+        [panel addSubview:subtitle];
+
+        NSMutableArray<UIView *> *marks =
+            [NSMutableArray arrayWithCapacity:4];
+
+        for (NSUInteger i = 0; i < 4; i++) {
+            UIView *mark =
+                [[UIView alloc] initWithFrame:CGRectZero];
+
+            mark.userInteractionEnabled =
+                NO;
+
+            [container addSubview:mark];
+
+            [marks addObject:mark];
+        }
+
+        [canvas addSubview:container];
+
+        gOverspeedBannerContainer =
+            container;
+
+        gOverspeedBannerPanel =
+            panel;
+
+        gOverspeedFuelIcon =
+            fuelIcon;
+
+        gOverspeedTitleLabel =
+            title;
+
+        gOverspeedSubtitleLabel =
+            subtitle;
+
+        gOverspeedWarningMarks =
+            marks;
+
+        VMLApplyOverspeedBannerColor(
+            VMLOverspeedYellowColor()
+        );
+    } else if (gOverspeedBannerContainer.superview != canvas) {
+        [gOverspeedBannerContainer removeFromSuperview];
+
+        [canvas addSubview:
+            gOverspeedBannerContainer];
+    }
+
+    VMLLayoutOverspeedBanner();
+}
+
+static void VMLShowOverspeedBannerForPhase(BOOL yellowPhase) {
+    VMLAttachOverspeedBannerIfNeeded();
+
+    if (!gOverspeedBannerContainer)
+        return;
+
+    UIColor *color =
+        yellowPhase
+            ? VMLOverspeedYellowColor()
+            : VMLOverspeedBlueColor();
+
+    VMLApplyOverspeedBannerColor(
+        color
+    );
+
+    VMLLayoutOverspeedBanner();
+
+    gOverspeedBannerContainer.hidden =
+        NO;
+
+    gOverspeedBannerContainer.alpha =
+        1.0;
+
+    gOverspeedBannerContainer.layer.zPosition =
+        CGFLOAT_MAX - 2.0;
+
+    if (gOverspeedBannerContainer.superview) {
+        [gOverspeedBannerContainer.superview
+            bringSubviewToFront:
+                gOverspeedBannerContainer];
+
+        if (gCarPlayBubble) {
+            [gOverspeedBannerContainer.superview
+                bringSubviewToFront:
+                    gCarPlayBubble];
+        }
+    }
+}
+
+static void VMLHideOverspeedBannerImmediately(void) {
+    if (!gOverspeedBannerContainer)
+        return;
+
+    gOverspeedBannerContainer.alpha =
+        0.0;
+
+    gOverspeedBannerContainer.hidden =
+        YES;
+}
+
 static void VMLAttachOverspeedViewIfNeeded(void) {
     if (!VMLIsCarPlayApp() ||
         !gCarPlayOverlayWindow ||
@@ -645,6 +1196,8 @@ static void VMLAttachOverspeedViewIfNeeded(void) {
         [canvas insertSubview:gOverspeedFlashView
                      atIndex:0];
     }
+
+    VMLAttachOverspeedBannerIfNeeded();
 }
 
 static void VMLOverspeedFlashTick(void) {
@@ -656,34 +1209,48 @@ static void VMLOverspeedFlashTick(void) {
 
     VMLAttachOverspeedViewIfNeeded();
 
-    if (gOverspeedFlashView) {
-        if (gOverspeedActive) {
-            gOverspeedFlashOn =
-                !gOverspeedFlashOn;
+    if (gOverspeedActive) {
+        // One synchronized phase every 0.5 second:
+        // yellow -> blue -> yellow -> blue...
+        gOverspeedFlashOn =
+            !gOverspeedFlashOn;
 
+        if (gOverspeedFlashView) {
             gOverspeedFlashView.hidden =
                 NO;
 
             [UIView performWithoutAnimation:^{
                 gOverspeedFlashView.alpha =
-                    gOverspeedFlashOn ? 0.82 : 0.28;
+                    gOverspeedFlashOn
+                        ? 0.82
+                        : 0.30;
             }];
-        } else {
-            gOverspeedFlashOn =
-                NO;
+        }
 
+        VMLShowOverspeedBannerForPhase(
+            gOverspeedFlashOn
+        );
+    } else {
+        gOverspeedFlashOn =
+            NO;
+
+        if (gOverspeedFlashView) {
             gOverspeedFlashView.alpha =
                 0.0;
 
             gOverspeedFlashView.hidden =
                 YES;
         }
+
+        // User requirement: no fade-out; disappear immediately
+        // the moment overspeed becomes false.
+        VMLHideOverspeedBannerImmediately();
     }
 
     dispatch_after(
         dispatch_time(
             DISPATCH_TIME_NOW,
-            250 * NSEC_PER_MSEC
+            500 * NSEC_PER_MSEC
         ),
         dispatch_get_main_queue(),
         ^{
@@ -714,17 +1281,36 @@ static void VMLSetOverspeedActive(BOOL active) {
 
     VMLAttachOverspeedViewIfNeeded();
 
-    if (!active &&
-        gOverspeedFlashView) {
-
+    if (!active) {
         gOverspeedFlashOn =
             NO;
 
-        gOverspeedFlashView.alpha =
-            0.0;
+        if (gOverspeedFlashView) {
+            gOverspeedFlashView.alpha =
+                0.0;
 
-        gOverspeedFlashView.hidden =
+            gOverspeedFlashView.hidden =
+                YES;
+        }
+
+        VMLHideOverspeedBannerImmediately();
+    } else {
+        // Show immediately on the first ON event instead of waiting
+        // for the next watchdog tick.
+        gOverspeedFlashOn =
             YES;
+
+        if (gOverspeedFlashView) {
+            gOverspeedFlashView.hidden =
+                NO;
+
+            gOverspeedFlashView.alpha =
+                0.82;
+        }
+
+        VMLShowOverspeedBannerForPhase(
+            YES
+        );
     }
 
     VMLTrace(
@@ -1254,7 +1840,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V15.3 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V15.4 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1290,6 +1876,8 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     gCarPlayOverlayWindow.hidden = gVMLCarPlaySceneActive;
 
     VMLAttachOverspeedViewIfNeeded();
+
+    VMLLayoutOverspeedBanner();
 
     gCarPlayOverlayWindow.alpha =
         1.0;
@@ -1343,7 +1931,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.3 SOS BRIGHT RED");
+        VMLLog(@"VML SPEED BUBBLE V15.4 RESPONSIVE FUEL ALERT");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1358,7 +1946,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V15.3 SPRINGBOARD ACTIVE");
+            VMLLog(@"V15.4 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1376,7 +1964,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V15.3 CARPLAY ACTIVE"
+                @"V15.4 CARPLAY ACTIVE"
             );
 
             return;

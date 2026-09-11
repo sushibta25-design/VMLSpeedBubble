@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 1.0.3
+Version: 15.4
 Architecture: iphoneos-arm64e
-Description: Floating VietMap Live speed limit bubble for Dopamine RootHide.
+Description: VML Speed Bubble V15.4 - responsive centered overspeed fuel alert banner; yellow/blue 0.5s synchronized flashing with bright-red full-screen SOS and instant hide when overspeed ends.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks

@@ -1,18 +1,21 @@
-# VMLSpeedBubble V11
+# VMLSpeedBubble V15.4 — Responsive Fuel Alert
 
-Changes from the 0.2.0 build:
-- Removes hard-coded 640x240 CarPlay root requirement.
-- Detects CarPlay candidates by scene role, external UIScreen, or landscape UIRootSceneWindow geometry.
-- Scans both UIApplication windows dynamically and UIWindowScene windows.
-- Creates a dedicated overlay UIWindow on the captured CarPlay UIWindowScene.
-- Keeps the previously proven _UIVisualEffectContentView host insertion as a second render path.
-- Scales bubble position/size relative to the actual host/display size.
-- Keeps RuntimeSniffer V4 unchanged for updateSpeedLimit IPC.
+Built directly from the last successful V15.3 SOS Bright Red source.
 
-Test log: /var/mobile/VMLHostSniffer.txt
-Useful searches:
-- VML CARPLAY MULTI-DISPLAY RENDER V11
-- [root] candidate
-- [overlay] *** CARPLAY OVERLAY WINDOW CREATED ***
-- [host] *** CARPLAY HOST BUBBLE ADDED ***
-- [scanner] no candidate windows
+When VietMap reports overspeed:
+- keeps the existing bright-red full-screen SOS warning;
+- shows a centered black alert banner:
+  - `XĂNG ĐANG TĂNG`
+  - `GIẢM TỐC ĐỘ ĐÊ!`
+- first line is heavier/larger than the second;
+- fuel-pump icon + border + four outside warning marks + text all change color together;
+- yellow for 0.5 second, blue for 0.5 second, repeating continuously;
+- banner is always centered in the active CarPlay canvas;
+- banner dimensions, icon, text, border and warning marks scale from the actual
+  CarPlay scene width/height instead of assuming one fixed display size.
+
+When overspeed becomes false:
+- the red SOS background is hidden;
+- the alert banner disappears immediately (no fade-out).
+
+The speed-limit bubble behavior is otherwise unchanged from V15.3.
