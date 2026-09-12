@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <math.h>
 
-// V15.7: DuoDash hosted-scene mirror with correct split-window selection.
+// V15.8: lock the overlay to the real DBDashboard CarPlay scene.
 // A UIWindow with a higher level still cannot cover _UISceneLayerHostContainerView
 // surfaces reliably. Keep the original pass-through bubble for the Dock/touches,
 // and mirror it inside the DuoDash window that owns two hosted scene surfaces.
@@ -46,6 +46,7 @@ static UIWindow *gCarPlayOverlayWindow = nil;
 static UIView *gCarPlayBubble = nil;
 static UIView *gDuoDashMirrorBubble = nil;
 static __weak UIWindow *gDuoDashHostWindow = nil;
+static __weak UIWindowScene *gLastSelectedCarPlayScene = nil;
 static NSUInteger gLastDuoDashHostCount = 0;
 static CGPoint gCarPlayBubbleCenterRatio = {0, 0};
 static BOOL gCarPlayBubblePositionLoaded = NO;
@@ -83,7 +84,7 @@ static void VMLAppend(NSString *path, NSString *prefix, NSString *format, va_lis
 }
 static void VMLLog(NSString *format, ...) {
     va_list args; va_start(args, format);
-    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.7]", format, args);
+    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.8]", format, args);
     va_end(args);
 }
 static void VMLTrace(NSString *format, ...) {
@@ -472,14 +473,53 @@ static BOOL VMLSceneLooksCarPlay(UIWindowScene *scene) {
 }
 
 static UIWindowScene *VMLFindCarPlayScene(void) {
-    UIWindowScene *best=nil; CGFloat bestArea=-1;
+    UIWindowScene *best=nil;
+    CGFloat bestScore=-CGFLOAT_MAX;
+
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         UIWindowScene *ws=(UIWindowScene *)scene;
         if (!VMLSceneLooksCarPlay(ws)) continue;
-        CGSize size=ws.screen.bounds.size; CGFloat area=size.width*size.height;
-        if (area>bestArea) {bestArea=area;best=ws;}
+
+        CGSize size=ws.screen.bounds.size;
+        CGFloat area=size.width*size.height;
+        NSString *persistentID=ws.session.persistentIdentifier?:@"";
+        BOOL isDashboard=([persistentID containsString:@"DBDashboard-Car"] ||
+                          [persistentID containsString:@"DBDashboard"]);
+        CGFloat highestLevel=-CGFLOAT_MAX;
+        for (UIWindow *window in ws.windows) {
+            if (window && !window.hidden && window.alpha>0.01)
+                highestLevel=MAX(highestLevel,window.windowLevel);
+        }
+        if (highestLevel==-CGFLOAT_MAX) highestLevel=-10000.0;
+
+        // Several CarPlay scenes report exactly 426.67 x 240. Area alone made
+        // V15.7 alternate between them. DuoDash creates its split window only
+        // in the DBDashboard-Car scene, so that identity must dominate.
+        CGFloat score=(isDashboard?1000000000.0:0.0)+
+                      (highestLevel>=UIWindowLevelAlert?100000000.0:0.0)+
+                      area+highestLevel;
+
+        if (!best || score>bestScore) {
+            best=ws;
+            bestScore=score;
+        }
     }
+
+    if (best && best!=gLastSelectedCarPlayScene) {
+        CGFloat highest=-CGFLOAT_MAX;
+        for (UIWindow *window in best.windows)
+            if (window && !window.hidden && window.alpha>0.01)
+                highest=MAX(highest,window.windowLevel);
+        VMLLog(@"[scene] SELECTED pid=%@ role=%@ size=%@ windows=%lu highestLevel=%.1f",
+               best.session.persistentIdentifier?:@"",
+               best.session.role?:@"",
+               NSStringFromCGSize(best.screen.bounds.size),
+               (unsigned long)best.windows.count,
+               highest);
+        gLastSelectedCarPlayScene=best;
+    }
+
     return best;
 }
 
@@ -657,7 +697,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         pan.cancelsTouchesInView=YES;pan.delaysTouchesBegan=NO;pan.delaysTouchesEnded=NO;
         pan.minimumNumberOfTouches=1;pan.maximumNumberOfTouches=1;[bubble addGestureRecognizer:pan];
         gCarPlayBubble=bubble;((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble=bubble;
-        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.7 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
+        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.8 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
     }
     gCarPlayOverlayWindow.frame=bounds;
     gCarPlayOverlayWindow.rootViewController.view.frame=CGRectMake(0,0,bounds.size.width,bounds.size.height);
@@ -684,19 +724,19 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.7 CORRECT DUODASH HOST WINDOW");
+        VMLLog(@"VML SPEED BUBBLE V15.8 LOCK DBDASHBOARD SCENE");
         VMLLog(@"bundle=%@ process=%@",VMLBundle(),VMLProcess());
         VMLLog(@"========================================");
         if(VMLIsSpringBoard()){
-            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.7 ***");
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.8 ***");
             VMLStartSpeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartSpringBoardReplayResponder();VMLStartSpringBoardRebroadcast();
-            VMLLog(@"V15.7 SPRINGBOARD ACTIVE");return;
+            VMLLog(@"V15.8 SPRINGBOARD ACTIVE");return;
         }
         if(VMLIsCarPlayApp()){
             VMLStartOverspeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartCarPlayReplayRequester();
             VMLStartCarPlaySceneReceiver();VMLStartOverlayLoop();
-            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.7 ***");
-            VMLLog(@"V15.7 CARPLAY ACTIVE");return;
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.8 ***");
+            VMLLog(@"V15.8 CARPLAY ACTIVE");return;
         }
     }
 }
