@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <math.h>
 
-// V15.6: DuoDash hosted-scene mirror.
+// V15.7: DuoDash hosted-scene mirror with correct split-window selection.
 // A UIWindow with a higher level still cannot cover _UISceneLayerHostContainerView
 // surfaces reliably. Keep the original pass-through bubble for the Dock/touches,
 // and mirror it inside the DuoDash window that owns two hosted scene surfaces.
@@ -83,7 +83,7 @@ static void VMLAppend(NSString *path, NSString *prefix, NSString *format, va_lis
 }
 static void VMLLog(NSString *format, ...) {
     va_list args; va_start(args, format);
-    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.6]", format, args);
+    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.7]", format, args);
     va_end(args);
 }
 static void VMLTrace(NSString *format, ...) {
@@ -493,18 +493,41 @@ static NSUInteger VMLHostedSceneLayerCount(UIView *view, NSUInteger depth) {
 }
 
 static UIWindow *VMLFindDuoDashHostWindow(UIWindowScene *scene, NSUInteger *hostCountOut) {
-    UIWindow *best=nil; NSUInteger bestCount=0; CGFloat bestLevel=-CGFLOAT_MAX;
+    UIWindow *best=nil;
+    NSUInteger bestCount=0;
+    CGFloat bestGeometryScore=-CGFLOAT_MAX;
+    CGRect sceneBounds=scene.coordinateSpace.bounds;
+
     for (UIWindow *window in scene.windows) {
         if (!window || window==gCarPlayOverlayWindow || window.hidden || window.alpha<=0.01 ||
             !window.rootViewController.view) continue;
+
         NSUInteger count=VMLHostedSceneLayerCount(window.rootViewController.view,0);
-        // DuoDash has two independent hosted app surfaces. A normal CarPlay window
-        // generally has zero or one and must not receive the mirror.
         if (count<2) continue;
-        if (count>bestCount || (count==bestCount && window.windowLevel>=bestLevel)) {
-            best=window; bestCount=count; bestLevel=window.windowLevel;
+
+        CGRect frame=window.frame;
+        BOOL insetFromDock=(CGRectGetMinX(frame)>1.0 &&
+                            CGRectGetWidth(frame)<CGRectGetWidth(sceneBounds)-1.0);
+        BOOL alertLevel=(window.windowLevel>=UIWindowLevelAlert);
+
+        // The normal Dashboard window can also contain two or more hosted surfaces,
+        // but it is full-screen at level -1. DuoDash's real split window is the
+        // elevated, Dock-inset window (currently x ~= 45, Alert + 70).
+        // Rank window level first, then the split geometry. Hosted-surface count is
+        // only a qualification/tie-breaker and must never make the level -1
+        // Dashboard beat the real DuoDash window.
+        CGFloat geometryScore=(alertLevel?1000000.0:0.0)+
+                              (insetFromDock?100000.0:0.0)+
+                              window.windowLevel;
+
+        if (!best || geometryScore>bestGeometryScore ||
+            (fabs(geometryScore-bestGeometryScore)<0.5 && count>bestCount)) {
+            best=window;
+            bestCount=count;
+            bestGeometryScore=geometryScore;
         }
     }
+
     if (hostCountOut) *hostCountOut=bestCount;
     return best;
 }
@@ -634,7 +657,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         pan.cancelsTouchesInView=YES;pan.delaysTouchesBegan=NO;pan.delaysTouchesEnded=NO;
         pan.minimumNumberOfTouches=1;pan.maximumNumberOfTouches=1;[bubble addGestureRecognizer:pan];
         gCarPlayBubble=bubble;((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble=bubble;
-        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.6 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
+        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.7 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
     }
     gCarPlayOverlayWindow.frame=bounds;
     gCarPlayOverlayWindow.rootViewController.view.frame=CGRectMake(0,0,bounds.size.width,bounds.size.height);
@@ -661,19 +684,19 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.6 DUODASH HOSTED-SCENE MIRROR");
+        VMLLog(@"VML SPEED BUBBLE V15.7 CORRECT DUODASH HOST WINDOW");
         VMLLog(@"bundle=%@ process=%@",VMLBundle(),VMLProcess());
         VMLLog(@"========================================");
         if(VMLIsSpringBoard()){
-            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.6 ***");
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.7 ***");
             VMLStartSpeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartSpringBoardReplayResponder();VMLStartSpringBoardRebroadcast();
-            VMLLog(@"V15.6 SPRINGBOARD ACTIVE");return;
+            VMLLog(@"V15.7 SPRINGBOARD ACTIVE");return;
         }
         if(VMLIsCarPlayApp()){
             VMLStartOverspeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartCarPlayReplayRequester();
             VMLStartCarPlaySceneReceiver();VMLStartOverlayLoop();
-            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.6 ***");
-            VMLLog(@"V15.6 CARPLAY ACTIVE");return;
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.7 ***");
+            VMLLog(@"V15.7 CARPLAY ACTIVE");return;
         }
     }
 }
