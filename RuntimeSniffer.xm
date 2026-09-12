@@ -288,6 +288,149 @@ static void VMLLog(NSString *format, ...) {
 }
 
 
+static NSString *VMLClassDumpPath(void) {
+    NSString *documents =
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+
+    return [documents stringByAppendingPathComponent:@"VMLClassDump.txt"];
+}
+
+static void VMLClassDumpWrite(NSString *line) {
+    if (!line) return;
+
+    NSString *path = VMLClassDumpPath();
+    NSString *out = [line stringByAppendingString:@"\n"];
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!fh) {
+        [out writeToFile:path
+              atomically:YES
+                encoding:NSUTF8StringEncoding
+                   error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        NSData *data = [out dataUsingEncoding:NSUTF8StringEncoding];
+        [fh writeData:data];
+        [fh closeFile];
+    }
+
+    NSLog(@"[VMLCLASS] %@", line);
+}
+
+static BOOL VMLClassNameLooksInteresting(NSString *name) {
+    if (name.length == 0) return NO;
+
+    NSArray<NSString *> *keys = @[
+        @"warning", @"alert", @"sign", @"traffic", @"route",
+        @"navigation", @"nav", @"speed", @"limit", @"road",
+        @"parking", @"stop", @"camera", @"restriction", @"flutter",
+        @"vietmap", @"map"
+    ];
+
+    NSString *lower = name.lowercaseString;
+    for (NSString *key in keys) {
+        if ([lower containsString:key]) return YES;
+    }
+    return NO;
+}
+
+static void VMLDumpLoadedImagesAndClasses(void) {
+    if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"vn.vietmap.live"])
+        return;
+
+    // Start a fresh dump on every app launch.
+    [[NSFileManager defaultManager] removeItemAtPath:VMLClassDumpPath() error:nil];
+
+    NSString *bundlePath = NSBundle.mainBundle.bundlePath ?: @"";
+    VMLClassDumpWrite(@"============================================================");
+    VMLClassDumpWrite([NSString stringWithFormat:@"VML CLASS DUMP bundle=%@ process=%@",
+                       NSBundle.mainBundle.bundleIdentifier ?: @"nil",
+                       NSProcessInfo.processInfo.processName ?: @"nil"]);
+    VMLClassDumpWrite([NSString stringWithFormat:@"bundlePath=%@", bundlePath]);
+    VMLClassDumpWrite(@"---------------- LOADED IMAGES ----------------");
+
+    uint32_t imageCount = _dyld_image_count();
+    for (uint32_t i = 0; i < imageCount; i++) {
+        const char *raw = _dyld_get_image_name(i);
+        if (!raw) continue;
+        NSString *image = [NSString stringWithUTF8String:raw];
+        if (!image) continue;
+
+        // App executable + embedded Frameworks are the highest-value images.
+        if (bundlePath.length > 0 && [image hasPrefix:bundlePath]) {
+            VMLClassDumpWrite([NSString stringWithFormat:@"[IMAGE] %@", image]);
+        }
+    }
+
+    VMLClassDumpWrite(@"---------------- APP CLASSES ----------------");
+
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) {
+        VMLClassDumpWrite(@"objc_getClassList returned no classes");
+        return;
+    }
+
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    if (!classes) {
+        VMLClassDumpWrite(@"calloc failed");
+        return;
+    }
+
+    count = objc_getClassList(classes, count);
+    NSUInteger appClassCount = 0;
+    NSUInteger interestingCount = 0;
+
+    for (int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        if (!cls) continue;
+
+        const char *rawName = class_getName(cls);
+        const char *rawImage = class_getImageName(cls);
+        if (!rawName || !rawImage) continue;
+
+        NSString *name = [NSString stringWithUTF8String:rawName];
+        NSString *image = [NSString stringWithUTF8String:rawImage];
+        if (!name || !image) continue;
+
+        if (bundlePath.length == 0 || ![image hasPrefix:bundlePath])
+            continue;
+
+        appClassCount++;
+        BOOL interesting = VMLClassNameLooksInteresting(name);
+        if (interesting) interestingCount++;
+
+        VMLClassDumpWrite([NSString stringWithFormat:@"%@%@ | %@",
+                           interesting ? @"[HOT] " : @"",
+                           name,
+                           image]);
+    }
+
+    free(classes);
+
+    VMLClassDumpWrite(@"---------------- SUMMARY ----------------");
+    VMLClassDumpWrite([NSString stringWithFormat:@"runtimeClasses=%d appClasses=%lu hotClasses=%lu images=%u",
+                       count,
+                       (unsigned long)appClassCount,
+                       (unsigned long)interestingCount,
+                       imageCount]);
+    VMLClassDumpWrite(@"============================================================");
+
+    VMLLog(@"CLASS DUMP COMPLETE path=%@ appClasses=%lu hotClasses=%lu",
+           VMLClassDumpPath(),
+           (unsigned long)appClassCount,
+           (unsigned long)interestingCount);
+}
+
+static void VMLScheduleClassDump(void) {
+    // Flutter/plugins may load after launch, so dump once after the app has settled.
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            VMLDumpLoadedImagesAndClasses();
+        }
+    );
+}
+
 static void VMLTrace(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -753,6 +896,7 @@ static void VMLStart(void) {
 
     VMLInstallPhoneForegroundObservers();
     VMLStartCarPlayTemplateSceneWatcher();
+    VMLScheduleClassDump();
 
 
 
