@@ -5,7 +5,8 @@
 #import <objc/message.h>
 #import <math.h>
 
-// V15.8: lock the overlay to the real DBDashboard CarPlay scene.
+// V15.9: synchronized overlays on every CarPlay Dashboard scene.
+// CarPlay can keep multiple equal-size DBDashboard scenes alive at once.
 // A UIWindow with a higher level still cannot cover _UISceneLayerHostContainerView
 // surfaces reliably. Keep the original pass-through bubble for the Dock/touches,
 // and mirror it inside the DuoDash window that owns two hosted scene surfaces.
@@ -48,6 +49,8 @@ static UIView *gDuoDashMirrorBubble = nil;
 static __weak UIWindow *gDuoDashHostWindow = nil;
 static __weak UIWindowScene *gLastSelectedCarPlayScene = nil;
 static NSUInteger gLastDuoDashHostCount = 0;
+static NSMutableDictionary<NSString *, VMLPassthroughWindow *> *gSatelliteOverlayWindows = nil;
+static NSMutableDictionary<NSString *, UIView *> *gSatelliteOverlayBubbles = nil;
 static CGPoint gCarPlayBubbleCenterRatio = {0, 0};
 static BOOL gCarPlayBubblePositionLoaded = NO;
 static BOOL gOverlayLoopRunning = NO;
@@ -84,7 +87,7 @@ static void VMLAppend(NSString *path, NSString *prefix, NSString *format, va_lis
 }
 static void VMLLog(NSString *format, ...) {
     va_list args; va_start(args, format);
-    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.8]", format, args);
+    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.9]", format, args);
     va_end(args);
 }
 static void VMLTrace(NSString *format, ...) {
@@ -138,6 +141,8 @@ static void VMLUpdateOneBubble(UIView *bubble) {
 static void VMLUpdateAllBubbles(void) {
     VMLUpdateOneBubble(gCarPlayBubble);
     VMLUpdateOneBubble(gDuoDashMirrorBubble);
+    for (UIView *bubble in gSatelliteOverlayBubbles.allValues)
+        VMLUpdateOneBubble(bubble);
 }
 
 #pragma mark - Speed IPC
@@ -451,6 +456,8 @@ static void VMLReadCarPlaySceneState(void) {
     }
     gCarPlayOverlayWindow.hidden=active;
     gDuoDashMirrorBubble.hidden=active;
+    for (UIWindow *window in gSatelliteOverlayWindows.allValues)
+        window.hidden=active;
 }
 static void VMLStartCarPlaySceneReceiver(void) {
     if (gVMLCarPlaySceneToken) return;
@@ -473,10 +480,16 @@ static BOOL VMLSceneLooksCarPlay(UIWindowScene *scene) {
 }
 
 static UIWindowScene *VMLFindCarPlayScene(void) {
+    NSSet<UIScene *> *connected=UIApplication.sharedApplication.connectedScenes;
+    UIWindowScene *current=gCarPlayOverlayWindow.windowScene;
+    if (current && [connected containsObject:current] && VMLSceneLooksCarPlay(current))
+        return current;
+
     UIWindowScene *best=nil;
     CGFloat bestScore=-CGFLOAT_MAX;
+    NSString *bestPersistentID=nil;
 
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    for (UIScene *scene in connected) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         UIWindowScene *ws=(UIWindowScene *)scene;
         if (!VMLSceneLooksCarPlay(ws)) continue;
@@ -500,9 +513,14 @@ static UIWindowScene *VMLFindCarPlayScene(void) {
                       (highestLevel>=UIWindowLevelAlert?100000000.0:0.0)+
                       area+highestLevel;
 
-        if (!best || score>bestScore) {
+        // Make equal-score selection deterministic. The other equal-size scenes
+        // receive satellite overlays below, so the primary must never oscillate.
+        BOOL winsTie=(fabs(score-bestScore)<0.5 &&
+                      (!bestPersistentID || [persistentID compare:bestPersistentID]==NSOrderedAscending));
+        if (!best || score>bestScore || winsTie) {
             best=ws;
             bestScore=score;
+            bestPersistentID=persistentID;
         }
     }
 
@@ -629,19 +647,42 @@ static CGRect VMLCarPlayBubbleFrameForScene(CGRect bounds,CGFloat size) {
     return CGRectMake(x-half,y-half,size,size);
 }
 
+static void VMLLayoutSynchronizedOverlayBubbles(void) {
+    if (gCarPlayOverlayWindow.rootViewController.view && gCarPlayBubble) {
+        UIView *canvas=gCarPlayOverlayWindow.rootViewController.view;
+        CGFloat size=gCarPlayBubble.bounds.size.width;
+        gCarPlayBubble.frame=VMLCarPlayBubbleFrameForScene(canvas.bounds,size);
+    }
+    for (NSString *key in gSatelliteOverlayWindows) {
+        VMLPassthroughWindow *window=gSatelliteOverlayWindows[key];
+        UIView *bubble=gSatelliteOverlayBubbles[key];
+        UIView *canvas=window.rootViewController.view;
+        if (!window || !bubble || !canvas) continue;
+        CGFloat size=bubble.bounds.size.width;
+        bubble.frame=VMLCarPlayBubbleFrameForScene(canvas.bounds,size);
+        VMLUpdateOneBubble(bubble);
+    }
+}
+
 static void VMLHandleCarPlayBubblePan(UIPanGestureRecognizer *pan) {
-    if (!gCarPlayOverlayWindow || !gCarPlayBubble) return;
-    UIView *canvas=gCarPlayOverlayWindow.rootViewController.view; if(!canvas)return;
+    UIView *sourceBubble=pan.view;
+    UIView *canvas=sourceBubble.superview;
+    if (!sourceBubble || !canvas) return;
     UIGestureRecognizerState state=pan.state;
-    if(state==UIGestureRecognizerStateBegan){gCarPlayDragging=YES;gCarPlayBubble.layer.actions=@{@"position":[NSNull null],@"bounds":[NSNull null],@"frame":[NSNull null]};}
+    if(state==UIGestureRecognizerStateBegan){
+        gCarPlayDragging=YES;
+        sourceBubble.layer.actions=@{@"position":[NSNull null],@"bounds":[NSNull null],@"frame":[NSNull null]};
+    }
     if(state==UIGestureRecognizerStateBegan||state==UIGestureRecognizerStateChanged){
-        CGPoint finger=[pan locationInView:canvas]; CGFloat hw=gCarPlayBubble.bounds.size.width/2,hh=gCarPlayBubble.bounds.size.height/2;
+        CGPoint finger=[pan locationInView:canvas];
+        CGFloat hw=sourceBubble.bounds.size.width/2,hh=sourceBubble.bounds.size.height/2;
         CGFloat W=MAX(canvas.bounds.size.width,1),H=MAX(canvas.bounds.size.height,1);
         finger.x=MAX(hw+4,MIN(W-hw-4,finger.x)); finger.y=MAX(hh+4,MIN(H-hh-4,finger.y));
-        [UIView performWithoutAnimation:^{gCarPlayBubble.center=finger;}];
         gCarPlayBubbleCenterRatio=CGPointMake(finger.x/W,finger.y/H);gCarPlayBubblePositionLoaded=YES;
+        [UIView performWithoutAnimation:^{VMLLayoutSynchronizedOverlayBubbles();}];
         UIWindowScene *scene=gCarPlayOverlayWindow.windowScene;
-        if(scene) VMLRefreshDuoDashMirror(scene,gCarPlayBubble.frame,gCarPlayBubble.bounds.size.width);
+        if(scene && gCarPlayBubble)
+            VMLRefreshDuoDashMirror(scene,gCarPlayBubble.frame,gCarPlayBubble.bounds.size.width);
     }
     if(state==UIGestureRecognizerStateEnded||state==UIGestureRecognizerStateCancelled||state==UIGestureRecognizerStateFailed){
         VMLSaveCarPlayBubblePosition();gCarPlayDragging=NO;
@@ -656,6 +697,84 @@ static void VMLHandleCarPlayBubblePan(UIPanGestureRecognizer *pan) {
 - (void)handlePan:(UIPanGestureRecognizer *)pan{VMLHandleCarPlayBubblePan(pan);}
 @end
 static VMLCarPlayDragTarget *gCarPlayDragTarget=nil;
+
+static NSString *VMLSceneOverlayKey(UIWindowScene *scene) {
+    NSString *persistentID=scene.session.persistentIdentifier;
+    return persistentID.length ? persistentID : [NSString stringWithFormat:@"scene-%p",scene];
+}
+
+static void VMLRefreshSatelliteOverlays(UIWindowScene *primaryScene) {
+    if (!gSatelliteOverlayWindows)
+        gSatelliteOverlayWindows=[NSMutableDictionary dictionary];
+    if (!gSatelliteOverlayBubbles)
+        gSatelliteOverlayBubbles=[NSMutableDictionary dictionary];
+
+    NSMutableSet<NSString *> *liveKeys=[NSMutableSet set];
+    for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
+        if (![candidate isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *scene=(UIWindowScene *)candidate;
+        if (scene==primaryScene || !VMLSceneLooksCarPlay(scene)) continue;
+
+        NSString *persistentID=scene.session.persistentIdentifier?:@"";
+        if (![persistentID containsString:@"DBDashboard"]) continue;
+        NSString *key=VMLSceneOverlayKey(scene);
+        [liveKeys addObject:key];
+
+        VMLPassthroughWindow *window=gSatelliteOverlayWindows[key];
+        UIView *bubble=gSatelliteOverlayBubbles[key];
+        CGRect bounds=scene.coordinateSpace.bounds;
+        if (CGRectIsEmpty(bounds)) bounds=scene.screen.bounds;
+        CGFloat size=MAX(84,MIN(112,MAX(bounds.size.height,1)*0.40));
+
+        if (!window || window.windowScene!=scene || !bubble) {
+            window.hidden=YES;
+            window.rootViewController=nil;
+            window=[[VMLPassthroughWindow alloc]initWithWindowScene:scene];
+            window.backgroundColor=UIColor.clearColor;
+            window.userInteractionEnabled=YES;
+            UIViewController *vc=[UIViewController new];
+            vc.view.backgroundColor=UIColor.clearColor;
+            vc.view.userInteractionEnabled=YES;
+            window.rootViewController=vc;
+            bubble=VMLMakeBubble(kCarPlayBubbleTag+100+gSatelliteOverlayWindows.count,size);
+            bubble.userInteractionEnabled=YES;
+            [vc.view addSubview:bubble];
+            UIPanGestureRecognizer *pan=[[UIPanGestureRecognizer alloc]
+                initWithTarget:gCarPlayDragTarget action:@selector(handlePan:)];
+            pan.cancelsTouchesInView=YES;
+            pan.delaysTouchesBegan=NO;
+            pan.delaysTouchesEnded=NO;
+            pan.minimumNumberOfTouches=1;
+            pan.maximumNumberOfTouches=1;
+            [bubble addGestureRecognizer:pan];
+            window.interactiveBubble=bubble;
+            gSatelliteOverlayWindows[key]=window;
+            gSatelliteOverlayBubbles[key]=bubble;
+            VMLLog(@"[multi-scene] CREATED pid=%@ role=%@",persistentID,scene.session.role?:@"");
+        }
+
+        CGFloat highest=UIWindowLevelAlert;
+        for (UIWindow *other in scene.windows)
+            if (other && other!=window) highest=MAX(highest,other.windowLevel);
+        window.windowLevel=MAX(UIWindowLevelAlert+100,highest+100);
+        window.frame=bounds;
+        window.rootViewController.view.frame=CGRectMake(0,0,bounds.size.width,bounds.size.height);
+        bubble.frame=VMLCarPlayBubbleFrameForScene(window.rootViewController.view.bounds,size);
+        window.hidden=gVMLCarPlaySceneActive;
+        window.alpha=1;
+        VMLUpdateOneBubble(bubble);
+    }
+
+    for (NSString *key in [gSatelliteOverlayWindows.allKeys copy]) {
+        if ([liveKeys containsObject:key]) continue;
+        VMLPassthroughWindow *window=gSatelliteOverlayWindows[key];
+        window.hidden=YES;
+        window.rootViewController=nil;
+        [gSatelliteOverlayWindows removeObjectForKey:key];
+        [gSatelliteOverlayBubbles removeObjectForKey:key];
+        VMLLog(@"[multi-scene] REMOVED pid=%@",key);
+    }
+}
 
 static void VMLDestroyOldOverlayIfNeeded(UIWindowScene *wantedScene) {
     if(!gCarPlayOverlayWindow||gCarPlayOverlayWindow.windowScene==wantedScene)return;
@@ -697,7 +816,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
         pan.cancelsTouchesInView=YES;pan.delaysTouchesBegan=NO;pan.delaysTouchesEnded=NO;
         pan.minimumNumberOfTouches=1;pan.maximumNumberOfTouches=1;[bubble addGestureRecognizer:pan];
         gCarPlayBubble=bubble;((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble=bubble;
-        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.8 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
+        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.9 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
     }
     gCarPlayOverlayWindow.frame=bounds;
     gCarPlayOverlayWindow.rootViewController.view.frame=CGRectMake(0,0,bounds.size.width,bounds.size.height);
@@ -705,6 +824,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     VMLUpdateOneBubble(gCarPlayBubble);
     gCarPlayOverlayWindow.hidden=gVMLCarPlaySceneActive;
     if(!gVMLCarPlaySceneActive)VMLPromoteOverlayAboveCarPlayWindows(scene);
+    VMLRefreshSatelliteOverlays(scene);
     VMLRefreshDuoDashMirror(scene,bubbleFrame,size);
     VMLAttachOverspeedViewIfNeeded();VMLLayoutOverspeedBanner();gCarPlayOverlayWindow.alpha=1;
 }
@@ -724,19 +844,19 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.8 LOCK DBDASHBOARD SCENE");
+        VMLLog(@"VML SPEED BUBBLE V15.9 MULTI-SCENE OVERLAY");
         VMLLog(@"bundle=%@ process=%@",VMLBundle(),VMLProcess());
         VMLLog(@"========================================");
         if(VMLIsSpringBoard()){
-            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.8 ***");
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.9 ***");
             VMLStartSpeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartSpringBoardReplayResponder();VMLStartSpringBoardRebroadcast();
-            VMLLog(@"V15.8 SPRINGBOARD ACTIVE");return;
+            VMLLog(@"V15.9 SPRINGBOARD ACTIVE");return;
         }
         if(VMLIsCarPlayApp()){
             VMLStartOverspeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartCarPlayReplayRequester();
             VMLStartCarPlaySceneReceiver();VMLStartOverlayLoop();
-            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.8 ***");
-            VMLLog(@"V15.8 CARPLAY ACTIVE");return;
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.9 ***");
+            VMLLog(@"V15.9 CARPLAY ACTIVE");return;
         }
     }
 }
