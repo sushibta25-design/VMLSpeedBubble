@@ -515,10 +515,14 @@ static void VMLDumpMethodsForClassObject(Class cls, BOOL classMethods) {
         Method m = methods[i];
         SEL sel = method_getName(m);
         const char *types = method_getTypeEncoding(m);
+        NSString *methodKind = classMethods ? @"+" : @"-";
+        NSString *selectorName = NSStringFromSelector(sel);
+        if (!selectorName) selectorName = @"?";
+        const char *safeTypes = types ? types : "?";
         VMLMethodDumpWrite([NSString stringWithFormat:@"  %@ %@ | types=%s",
-                            classMethods ? @"+" : @"-",
-                            NSStringFromSelector(sel) ?: @"?",
-                            types ?: "?"]]);
+                            methodKind,
+                            selectorName,
+                            safeTypes]);
     }
     if (methods) free(methods);
 }
