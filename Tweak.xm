@@ -3,162 +3,104 @@
 #import <QuartzCore/QuartzCore.h>
 #import <notify.h>
 #import <objc/message.h>
+#import <math.h>
 
+// V15.6: DuoDash hosted-scene mirror.
+// A UIWindow with a higher level still cannot cover _UISceneLayerHostContainerView
+// surfaces reliably. Keep the original pass-through bubble for the Dock/touches,
+// and mirror it inside the DuoDash window that owns two hosted scene surfaces.
 
 @interface VMLPassthroughWindow : UIWindow
-@property (nonatomic, weak) UIView *interactiveBubble;
+@property(nonatomic, weak) UIView *interactiveBubble;
 @end
 
 @implementation VMLPassthroughWindow
-
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *bubble =
-        self.interactiveBubble;
-
-    if (!bubble ||
-        bubble.hidden ||
-        bubble.alpha <= 0.01) {
-
-        return nil;
-    }
-
-    CGPoint p =
-        [bubble convertPoint:point fromView:self];
-
-    if (CGRectContainsPoint(
-            bubble.bounds,
-            p
-        )) {
-
-        return [bubble hitTest:p
-                     withEvent:event] ?: bubble;
-    }
-
-    return nil;
+    UIView *bubble = self.interactiveBubble;
+    if (!bubble || bubble.hidden || bubble.alpha <= 0.01) return nil;
+    CGPoint p = [bubble convertPoint:point fromView:self];
+    if (!CGRectContainsPoint(bubble.bounds, p)) return nil;
+    return [bubble hitTest:p withEvent:event] ?: bubble;
 }
-
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return ([self hitTest:point withEvent:event] != nil);
+    return [self hitTest:point withEvent:event] != nil;
 }
-
 @end
 
 #pragma mark - Globals
 
 static NSInteger gCurrentSpeed = 0;
+static int gSpeedNotifyToken = 0;
+static int gEncodedReceiverStarted = 0;
+static NSMutableArray<NSNumber *> *gEncodedSpeedTokens = nil;
+static int gSpringBoardReplayRequestToken = 0;
+static BOOL gSpringBoardRebroadcastRunning = NO;
+static BOOL gCarPlayReplayRequesterRunning = NO;
+static NSInteger gCarPlayReplayRequestCount = 0;
+static BOOL gCarPlayHasEncodedSpeed = NO;
+
+static int gVMLCarPlaySceneToken = 0;
+static BOOL gVMLCarPlaySceneActive = NO;
+
+static UIWindow *gCarPlayOverlayWindow = nil;
+static UIView *gCarPlayBubble = nil;
+static UIView *gDuoDashMirrorBubble = nil;
+static __weak UIWindow *gDuoDashHostWindow = nil;
+static NSUInteger gLastDuoDashHostCount = 0;
+static CGPoint gCarPlayBubbleCenterRatio = {0, 0};
+static BOOL gCarPlayBubblePositionLoaded = NO;
+static BOOL gOverlayLoopRunning = NO;
+static BOOL gCarPlayDragging = NO;
+
 static int gOverspeedOnToken = 0;
 static int gOverspeedOffToken = 0;
 static BOOL gOverspeedActive = NO;
 static BOOL gOverspeedFlashOn = NO;
-static UIView *gOverspeedFlashView = nil;
 static BOOL gOverspeedFlashLoopRunning = NO;
+static UIView *gOverspeedFlashView = nil;
 static UIView *gOverspeedBannerContainer = nil;
 static UIView *gOverspeedBannerPanel = nil;
 static UIImageView *gOverspeedFuelIcon = nil;
 static UILabel *gOverspeedTitleLabel = nil;
 static UILabel *gOverspeedSubtitleLabel = nil;
 static NSMutableArray<UIView *> *gOverspeedWarningMarks = nil;
-static void VMLBroadcastEncodedSpeed(NSInteger speed);
-static BOOL gCarPlayHasEncodedSpeed = NO;
-static void VMLTrace(NSString *format, ...);
-static NSString *VMLBundle(void);
-
-
-static int gSpeedNotifyToken = 0;
-static int gVMLCarPlaySceneToken = 0;
-static BOOL gVMLCarPlaySceneActive = NO;
-
-static UIWindow *gCarPlayOverlayWindow = nil;
-static CGPoint gCarPlayBubbleCenterRatio = {0.0, 0.0};
-static BOOL gCarPlayBubblePositionLoaded = NO;
-static UIView *gCarPlayBubble = nil;
-
-static BOOL gOverlayLoopRunning = NO;
-static BOOL gCarPlayDragging = NO;
 
 static const NSInteger kCarPlayBubbleTag = 990199;
 static const NSInteger kLabelTag = 990100;
 
-#pragma mark - Logging
+#pragma mark - Logging / process
 
+static NSString *VMLBundle(void) { return NSBundle.mainBundle.bundleIdentifier ?: @""; }
+static NSString *VMLProcess(void) { return NSProcessInfo.processInfo.processName ?: @""; }
+static BOOL VMLIsSpringBoard(void) { return [VMLBundle() isEqualToString:@"com.apple.springboard"]; }
+static BOOL VMLIsCarPlayApp(void) { return [VMLBundle() isEqualToString:@"com.apple.CarPlayApp"]; }
+
+static void VMLAppend(NSString *path, NSString *prefix, NSString *format, va_list args) {
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    if (prefix) NSLog(@"%@ %@", prefix, message);
+    FILE *f = fopen(path.UTF8String, "a");
+    if (f) { fprintf(f, "%s\n", message.UTF8String); fclose(f); }
+}
 static void VMLLog(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
-
-    NSString *msg =
-        [[NSString alloc] initWithFormat:format arguments:args];
-
+    va_list args; va_start(args, format);
+    VMLAppend(@"/var/mobile/VMLHostSniffer.txt", @"[VMLV15.6]", format, args);
     va_end(args);
-
-    NSLog(@"[VMLV12.3] %@", msg);
-
-    NSString *line =
-        [NSString stringWithFormat:@"%@\n", msg];
-
-    FILE *f =
-        fopen("/var/mobile/VMLHostSniffer.txt", "a");
-
-    if (f) {
-        fprintf(f, "%s", line.UTF8String);
-        fclose(f);
-    }
 }
-
-
 static void VMLTrace(NSString *format, ...) {
-    va_list args;
-    va_start(args, format);
-
-    NSString *msg =
-        [[NSString alloc] initWithFormat:format arguments:args];
-
+    va_list args; va_start(args, format);
+    VMLAppend(@"/var/mobile/VMLSpeedTrace.txt", nil, format, args);
     va_end(args);
-
-    NSString *line =
-        [NSString stringWithFormat:@"%@\n", msg];
-
-    FILE *f =
-        fopen("/var/mobile/VMLSpeedTrace.txt", "a");
-
-    if (f) {
-        fprintf(f, "%s", line.UTF8String);
-        fclose(f);
-    }
-}
-
-
-#pragma mark - Process
-
-static NSString *VMLBundle(void) {
-    return NSBundle.mainBundle.bundleIdentifier ?: @"";
-}
-
-static NSString *VMLProcess(void) {
-    return NSProcessInfo.processInfo.processName ?: @"";
-}
-
-static BOOL VMLIsSpringBoard(void) {
-    return [VMLBundle() isEqualToString:@"com.apple.springboard"];
-}
-
-static BOOL VMLIsCarPlayApp(void) {
-    return [VMLBundle() isEqualToString:@"com.apple.CarPlayApp"];
 }
 
 #pragma mark - Bubble
 
 static NSString *VMLSpeedText(void) {
-    if (gCurrentSpeed > 0 && gCurrentSpeed <= 200) {
-        return [NSString stringWithFormat:@"%ld", (long)gCurrentSpeed];
-    }
-
-    return @"--";
+    return (gCurrentSpeed > 0 && gCurrentSpeed <= 200)
+        ? [NSString stringWithFormat:@"%ld", (long)gCurrentSpeed] : @"--";
 }
 
 static UIView *VMLMakeBubble(NSInteger tag, CGFloat size) {
-    UIView *bubble =
-        [[UIView alloc] initWithFrame:CGRectMake(0, 0, size, size)];
-
+    UIView *bubble = [[UIView alloc] initWithFrame:CGRectMake(0, 0, size, size)];
     bubble.tag = tag;
     bubble.backgroundColor = UIColor.whiteColor;
     bubble.layer.cornerRadius = size / 2.0;
@@ -167,1879 +109,571 @@ static UIView *VMLMakeBubble(NSInteger tag, CGFloat size) {
     bubble.clipsToBounds = YES;
     bubble.userInteractionEnabled = NO;
 
-    UILabel *label =
-        [[UILabel alloc] initWithFrame:bubble.bounds];
-
+    UILabel *label = [[UILabel alloc] initWithFrame:bubble.bounds];
     label.tag = kLabelTag;
-    label.autoresizingMask =
-        UIViewAutoresizingFlexibleWidth |
-        UIViewAutoresizingFlexibleHeight;
+    label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     label.text = VMLSpeedText();
     label.textColor = UIColor.blackColor;
     label.textAlignment = NSTextAlignmentCenter;
-    label.font =
-        [UIFont systemFontOfSize:size * 0.40
-                         weight:UIFontWeightBold];
+    label.font = [UIFont systemFontOfSize:size * 0.40 weight:UIFontWeightBold];
     label.adjustsFontSizeToFitWidth = YES;
     label.minimumScaleFactor = 0.5;
-
     [bubble addSubview:label];
-
     return bubble;
 }
 
-static void VMLUpdateBubble(UIView *bubble) {
-    if (!bubble)
-        return;
-
-    UILabel *label =
-        (UILabel *)[bubble viewWithTag:kLabelTag];
-
-    if (label) {
-        label.text = VMLSpeedText();
-    }
-
-    bubble.hidden = NO;
+static void VMLUpdateOneBubble(UIView *bubble) {
+    if (!bubble) return;
+    UILabel *label = (UILabel *)[bubble viewWithTag:kLabelTag];
+    if (label) label.text = VMLSpeedText();
+    bubble.hidden = gVMLCarPlaySceneActive;
     bubble.alpha = 1.0;
     bubble.layer.hidden = NO;
     bubble.layer.opacity = 1.0;
     bubble.layer.zPosition = CGFLOAT_MAX;
-
-    if (bubble.superview) {
-        [bubble.superview bringSubviewToFront:bubble];
-    }
+    [bubble.superview bringSubviewToFront:bubble];
 }
 
-
+static void VMLUpdateAllBubbles(void) {
+    VMLUpdateOneBubble(gCarPlayBubble);
+    VMLUpdateOneBubble(gDuoDashMirrorBubble);
+}
 
 #pragma mark - Speed IPC
 
 static void VMLBroadcastEncodedSpeed(NSInteger speed) {
-    if (speed <= 0 || speed > 200)
-        return;
-
-    NSString *name =
-        [NSString stringWithFormat:
-            @"com.sushibta.vmlspeedbubble.speed.%ld",
-            (long)speed];
-
-    notify_post(
-        name.UTF8String
-    );
-
-    VMLTrace(
-        @"TRACE SB ENCODED RELAY speed=%ld",
-        (long)speed
-    );
+    if (speed <= 0 || speed > 200) return;
+    NSString *name = [NSString stringWithFormat:@"com.sushibta.vmlspeedbubble.speed.%ld", (long)speed];
+    notify_post(name.UTF8String);
+    VMLTrace(@"TRACE SB ENCODED RELAY speed=%ld", (long)speed);
 }
 
 static void VMLReadSpeed(void) {
-    // SpringBoard can see the fixed-name state correctly (proven by trace).
-    // It caches the latest valid speed and rebroadcasts it using the
-    // speed-encoded notification name.
-    if (!VMLIsSpringBoard())
-        return;
-
-    if (gSpeedNotifyToken == 0)
-        return;
-
+    if (!VMLIsSpringBoard() || gSpeedNotifyToken == 0) return;
     uint64_t state = 0;
-
-    uint32_t status =
-        notify_get_state(
-            gSpeedNotifyToken,
-            &state
-        );
-
-    if (status != NOTIFY_STATUS_OK)
-        return;
-
-    NSInteger speed =
-        (NSInteger)state;
-
-    if (speed <= 0 || speed > 200)
-        return;
-
-    gCurrentSpeed =
-        speed;
-
-    VMLTrace(
-        @"TRACE SB CACHE speed=%ld",
-        (long)speed
-    );
-
-    VMLBroadcastEncodedSpeed(
-        speed
-    );
+    if (notify_get_state(gSpeedNotifyToken, &state) != NOTIFY_STATUS_OK) return;
+    NSInteger speed = (NSInteger)state;
+    if (speed <= 0 || speed > 200) return;
+    gCurrentSpeed = speed;
+    VMLTrace(@"TRACE SB CACHE speed=%ld", (long)speed);
+    VMLBroadcastEncodedSpeed(speed);
 }
 
 static void VMLStartSpeedReceiver(void) {
-    if (!VMLIsSpringBoard())
-        return;
-
-    if (gSpeedNotifyToken != 0)
-        return;
-
+    if (!VMLIsSpringBoard() || gSpeedNotifyToken != 0) return;
     int token = 0;
-
-    uint32_t status =
-        notify_register_dispatch(
-            "com.sushibta.vmlspeedbubble.speed",
-            &token,
-            dispatch_get_main_queue(),
-            ^(int incomingToken) {
-                gSpeedNotifyToken =
-                    incomingToken;
-
-                VMLReadSpeed();
-            }
-        );
-
-    if (status != NOTIFY_STATUS_OK) {
-        VMLLog(
-            @"notify_register_dispatch failed=%u",
-            status
-        );
-        return;
-    }
-
-    gSpeedNotifyToken =
-        token;
-
+    uint32_t status = notify_register_dispatch(
+        "com.sushibta.vmlspeedbubble.speed", &token, dispatch_get_main_queue(),
+        ^(int incomingToken) { gSpeedNotifyToken = incomingToken; VMLReadSpeed(); });
+    if (status != NOTIFY_STATUS_OK) { VMLLog(@"notify_register_dispatch failed=%u", status); return; }
+    gSpeedNotifyToken = token;
     VMLReadSpeed();
 }
 
-
-
-
-
-
-
-
-#pragma mark - SpringBoard speed replay responder
-
-static int gSpringBoardReplayRequestToken = 0;
-
-static void VMLSpringBoardReplyWithCachedSpeed(void) {
-    if (!VMLIsSpringBoard())
-        return;
-
-    if (gCurrentSpeed > 0 &&
-        gCurrentSpeed <= 200) {
-
-        VMLBroadcastEncodedSpeed(
-            gCurrentSpeed
-        );
-
-        VMLTrace(
-            @"TRACE SB REPLAY ANSWER cached=%ld",
-            (long)gCurrentSpeed
-        );
-
-        return;
-    }
-
-    if (gSpeedNotifyToken == 0)
-        return;
-
-    uint64_t state = 0;
-
-    uint32_t status =
-        notify_get_state(
-            gSpeedNotifyToken,
-            &state
-        );
-
-    if (state != 0) {
-        VMLTrace(
-            @"TRACE SB REPLAY FALLBACK token=%d status=%u state=%llu",
-            gSpeedNotifyToken,
-            status,
-            state
-        );
-    }
-
-    if (status != NOTIFY_STATUS_OK)
-        return;
-
-    NSInteger speed =
-        (NSInteger)state;
-
-    if (speed <= 0 || speed > 200)
-        return;
-
-    gCurrentSpeed =
-        speed;
-
-    VMLBroadcastEncodedSpeed(
-        speed
-    );
-
-    VMLTrace(
-        @"TRACE SB REPLAY ANSWER fallback=%ld",
-        (long)speed
-    );
-}
-
-static void VMLStartSpringBoardReplayResponder(void) {
-    if (!VMLIsSpringBoard() ||
-        gSpringBoardReplayRequestToken != 0) {
-
-        return;
-    }
-
-    int token = 0;
-
-    uint32_t status =
-        notify_register_dispatch(
-            "com.sushibta.vmlspeedbubble.speed.request",
-            &token,
-            dispatch_get_main_queue(),
-            ^(__unused int incomingToken) {
-                VMLSpringBoardReplyWithCachedSpeed();
-            }
-        );
-
-    if (status == NOTIFY_STATUS_OK) {
-        gSpringBoardReplayRequestToken =
-            token;
-
-        VMLTrace(
-            @"TRACE SB REPLAY RESPONDER READY token=%d",
-            token
-        );
-    }
-}
-
-#pragma mark - Encoded speed IPC
-
-static NSMutableArray *gEncodedSpeedTokens = nil;
-static BOOL gSpringBoardRebroadcastRunning = NO;
-
 static void VMLApplyCarPlayEncodedSpeed(NSInteger speed) {
-    if (!VMLIsCarPlayApp())
-        return;
-
-    if (speed <= 0 || speed > 200)
-        return;
-
-    gCurrentSpeed =
-        speed;
-
+    if (!VMLIsCarPlayApp() || speed <= 0 || speed > 200) return;
+    gCurrentSpeed = speed;
     gCarPlayHasEncodedSpeed = YES;
-
-    if (gCarPlayBubble) {
-        UILabel *label =
-            (UILabel *)[gCarPlayBubble viewWithTag:kLabelTag];
-
-        if (label) {
-            label.text =
-                [NSString stringWithFormat:@"%ld", (long)speed];
-        }
-    }
-
-    VMLTrace(
-        @"CP TRACE ENCODED ACCEPT speed=%ld",
-        (long)speed
-    );
+    VMLUpdateAllBubbles();
+    VMLTrace(@"CP TRACE ENCODED ACCEPT speed=%ld", (long)speed);
 }
 
 static void VMLStartEncodedSpeedReceiver(void) {
-    if (!VMLIsCarPlayApp() &&
-        !VMLIsSpringBoard()) {
-
-        return;
-    }
-
-    if (gEncodedSpeedTokens)
-        return;
-
-    gEncodedSpeedTokens =
-        [NSMutableArray arrayWithCapacity:200];
-
-    for (NSInteger speed = 1;
-         speed <= 200;
-         speed++) {
-
-        NSString *name =
-            [NSString stringWithFormat:
-                @"com.sushibta.vmlspeedbubble.speed.%ld",
-                (long)speed];
-
-        int token = 0;
-        NSInteger capturedSpeed = speed;
-
-        uint32_t status =
-            notify_register_dispatch(
-                name.UTF8String,
-                &token,
-                dispatch_get_main_queue(),
-                ^(__unused int incomingToken) {
-                    if (VMLIsSpringBoard()) {
-                        gCurrentSpeed =
-                            capturedSpeed;
-
-                        VMLTrace(
-                            @"TRACE SB ENCODED CACHE speed=%ld",
-                            (long)capturedSpeed
-                        );
-                    } else if (VMLIsCarPlayApp()) {
-                        VMLApplyCarPlayEncodedSpeed(
-                            capturedSpeed
-                        );
-                    }
+    if ((!VMLIsCarPlayApp() && !VMLIsSpringBoard()) || gEncodedReceiverStarted) return;
+    gEncodedReceiverStarted = 1;
+    gEncodedSpeedTokens = [NSMutableArray arrayWithCapacity:200];
+    for (NSInteger speed = 1; speed <= 200; speed++) {
+        NSString *name = [NSString stringWithFormat:@"com.sushibta.vmlspeedbubble.speed.%ld", (long)speed];
+        int token = 0; NSInteger capturedSpeed = speed;
+        uint32_t status = notify_register_dispatch(name.UTF8String, &token, dispatch_get_main_queue(),
+            ^(__unused int incomingToken) {
+                if (VMLIsSpringBoard()) {
+                    gCurrentSpeed = capturedSpeed;
+                    VMLTrace(@"TRACE SB ENCODED CACHE speed=%ld", (long)capturedSpeed);
+                } else {
+                    VMLApplyCarPlayEncodedSpeed(capturedSpeed);
                 }
-            );
-
-        if (status == NOTIFY_STATUS_OK) {
-            [gEncodedSpeedTokens addObject:
-                @(token)];
-        }
+            });
+        if (status == NOTIFY_STATUS_OK) [gEncodedSpeedTokens addObject:@(token)];
     }
+    VMLTrace(@"TRACE ENCODED RECEIVER READY bundle=%@ count=%lu", VMLBundle(),
+             (unsigned long)gEncodedSpeedTokens.count);
+}
 
-    VMLTrace(
-        @"TRACE ENCODED RECEIVER READY bundle=%@ count=%lu",
-        VMLBundle(),
-        (unsigned long)gEncodedSpeedTokens.count
-    );
+static void VMLSpringBoardReplyWithCachedSpeed(void) {
+    if (!VMLIsSpringBoard()) return;
+    if (gCurrentSpeed > 0 && gCurrentSpeed <= 200) {
+        VMLBroadcastEncodedSpeed(gCurrentSpeed);
+        VMLTrace(@"TRACE SB REPLAY ANSWER cached=%ld", (long)gCurrentSpeed);
+        return;
+    }
+    if (!gSpeedNotifyToken) return;
+    uint64_t state = 0;
+    uint32_t status = notify_get_state(gSpeedNotifyToken, &state);
+    if (state) VMLTrace(@"TRACE SB REPLAY FALLBACK token=%d status=%u state=%llu",
+                        gSpeedNotifyToken, status, state);
+    NSInteger speed = (NSInteger)state;
+    if (status != NOTIFY_STATUS_OK || speed <= 0 || speed > 200) return;
+    gCurrentSpeed = speed;
+    VMLBroadcastEncodedSpeed(speed);
+    VMLTrace(@"TRACE SB REPLAY ANSWER fallback=%ld", (long)speed);
+}
+
+static void VMLStartSpringBoardReplayResponder(void) {
+    if (!VMLIsSpringBoard() || gSpringBoardReplayRequestToken) return;
+    int token = 0;
+    uint32_t status = notify_register_dispatch(
+        "com.sushibta.vmlspeedbubble.speed.request", &token, dispatch_get_main_queue(),
+        ^(__unused int incomingToken) { VMLSpringBoardReplyWithCachedSpeed(); });
+    if (status == NOTIFY_STATUS_OK) {
+        gSpringBoardReplayRequestToken = token;
+        VMLTrace(@"TRACE SB REPLAY RESPONDER READY token=%d", token);
+    }
 }
 
 static void VMLSpringBoardRebroadcastTick(void) {
-    if (!VMLIsSpringBoard()) {
-        gSpringBoardRebroadcastRunning =
-            NO;
-        return;
-    }
-
-    if (gCurrentSpeed > 0 &&
-        gCurrentSpeed <= 200) {
-
-        VMLBroadcastEncodedSpeed(
-            gCurrentSpeed
-        );
-    }
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            1 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLSpringBoardRebroadcastTick();
-        }
-    );
+    if (!VMLIsSpringBoard()) { gSpringBoardRebroadcastRunning = NO; return; }
+    if (gCurrentSpeed > 0 && gCurrentSpeed <= 200) VMLBroadcastEncodedSpeed(gCurrentSpeed);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        VMLSpringBoardRebroadcastTick();
+    });
 }
-
 static void VMLStartSpringBoardRebroadcast(void) {
-    if (!VMLIsSpringBoard() ||
-        gSpringBoardRebroadcastRunning) {
-
-        return;
-    }
-
-    gSpringBoardRebroadcastRunning =
-        YES;
-
+    if (!VMLIsSpringBoard() || gSpringBoardRebroadcastRunning) return;
+    gSpringBoardRebroadcastRunning = YES;
     VMLSpringBoardRebroadcastTick();
 }
 
-
-static BOOL gCarPlayReplayRequesterRunning = NO;
-static NSInteger gCarPlayReplayRequestCount = 0;
-
 static void VMLCarPlayReplayRequestTick(void) {
-    if (!VMLIsCarPlayApp()) {
-        gCarPlayReplayRequesterRunning =
-            NO;
-        return;
-    }
-
+    if (!VMLIsCarPlayApp()) { gCarPlayReplayRequesterRunning = NO; return; }
     if (!gCarPlayHasEncodedSpeed) {
-        notify_post(
-            "com.sushibta.vmlspeedbubble.speed.request"
-        );
-
+        notify_post("com.sushibta.vmlspeedbubble.speed.request");
         gCarPlayReplayRequestCount++;
-
-        if (gCarPlayReplayRequestCount == 1 ||
-            (gCarPlayReplayRequestCount % 5) == 0) {
-
-            VMLTrace(
-                @"CP TRACE REPLAY REQUEST count=%ld",
-                (long)gCarPlayReplayRequestCount
-            );
-        }
+        if (gCarPlayReplayRequestCount == 1 || gCarPlayReplayRequestCount % 5 == 0)
+            VMLTrace(@"CP TRACE REPLAY REQUEST count=%ld", (long)gCarPlayReplayRequestCount);
     }
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            1 * NSEC_PER_SEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLCarPlayReplayRequestTick();
-        }
-    );
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        VMLCarPlayReplayRequestTick();
+    });
 }
-
 static void VMLStartCarPlayReplayRequester(void) {
-    if (!VMLIsCarPlayApp() ||
-        gCarPlayReplayRequesterRunning) {
-
-        return;
-    }
-
-    gCarPlayReplayRequesterRunning =
-        YES;
-
+    if (!VMLIsCarPlayApp() || gCarPlayReplayRequesterRunning) return;
+    gCarPlayReplayRequesterRunning = YES;
     VMLCarPlayReplayRequestTick();
 }
 
-
-#pragma mark - SOS overspeed full-screen flash
-
+#pragma mark - Overspeed warning
 
 static UIColor *VMLOverspeedYellowColor(void) {
-    return [UIColor colorWithRed:1.0
-                           green:0.86
-                            blue:0.0
-                           alpha:1.0];
+    return [UIColor colorWithRed:1 green:0.86 blue:0 alpha:1];
 }
-
 static UIColor *VMLOverspeedBlueColor(void) {
-    return [UIColor colorWithRed:0.0
-                           green:0.66
-                            blue:1.0
-                           alpha:1.0];
+    return [UIColor colorWithRed:0 green:0.66 blue:1 alpha:1];
 }
 
 static void VMLApplyOverspeedBannerColor(UIColor *color) {
-    if (!color)
-        return;
-
-    if (gOverspeedBannerPanel) {
-        gOverspeedBannerPanel.layer.borderColor =
-            color.CGColor;
-
-        gOverspeedBannerPanel.layer.shadowColor =
-            color.CGColor;
-    }
-
-    if (gOverspeedFuelIcon) {
-        gOverspeedFuelIcon.tintColor =
-            color;
-    }
-
-    if (gOverspeedTitleLabel) {
-        gOverspeedTitleLabel.textColor =
-            color;
-    }
-
-    if (gOverspeedSubtitleLabel) {
-        gOverspeedSubtitleLabel.textColor =
-            color;
-    }
-
+    if (!color) return;
+    gOverspeedBannerPanel.layer.borderColor = color.CGColor;
+    gOverspeedBannerPanel.layer.shadowColor = color.CGColor;
+    gOverspeedFuelIcon.tintColor = color;
+    gOverspeedTitleLabel.textColor = color;
+    gOverspeedSubtitleLabel.textColor = color;
     for (UIView *mark in gOverspeedWarningMarks) {
-        mark.backgroundColor =
-            color;
-
-        mark.layer.shadowColor =
-            color.CGColor;
+        mark.backgroundColor = color;
+        mark.layer.shadowColor = color.CGColor;
     }
 }
 
 static void VMLLayoutOverspeedBanner(void) {
-    if (!gOverspeedBannerContainer ||
-        !gOverspeedBannerPanel ||
-        !gOverspeedBannerContainer.superview) {
+    UIView *container = gOverspeedBannerContainer;
+    UIView *panel = gOverspeedBannerPanel;
+    UIView *canvas = container.superview;
+    if (!container || !panel || !canvas) return;
+    CGFloat W = MAX(CGRectGetWidth(canvas.bounds), 1), H = MAX(CGRectGetHeight(canvas.bounds), 1);
+    CGFloat panelW = MAX(W * 0.58, MIN(W * 0.82, H * 3.55));
+    CGFloat panelH = MAX(H * 0.30, MIN(H * 0.48, panelW * 0.30));
+    CGFloat side = MIN(W * 0.065, panelH * 0.50);
+    CGFloat containerW = MIN(W * 0.94, panelW + side * 2);
+    container.bounds = CGRectMake(0, 0, containerW, panelH);
+    container.center = CGPointMake(CGRectGetMidX(canvas.bounds), CGRectGetMidY(canvas.bounds));
+    CGFloat panelX = (containerW - panelW) / 2;
+    panel.frame = CGRectMake(panelX, 0, panelW, panelH);
+    panel.layer.cornerRadius = MAX(10, panelH * 0.14);
+    panel.layer.borderWidth = MAX(3, panelH * 0.035);
+    panel.layer.shadowOpacity = 0.70;
+    panel.layer.shadowRadius = MAX(4, panelH * 0.08);
+    panel.layer.shadowOffset = CGSizeZero;
 
-        return;
-    }
-
-    UIView *canvas =
-        gOverspeedBannerContainer.superview;
-
-    CGFloat W =
-        MAX(CGRectGetWidth(canvas.bounds), 1.0);
-
-    CGFloat H =
-        MAX(CGRectGetHeight(canvas.bounds), 1.0);
-
-    // Responsive sizing for different CarPlay logical resolutions.
-    // Width is primarily screen-based; height follows screen height,
-    // with aspect safeguards so very wide/tall displays stay balanced.
-    CGFloat panelW =
-        MIN(
-            W * 0.82,
-            H * 3.55
-        );
-
-    panelW =
-        MAX(
-            W * 0.58,
-            panelW
-        );
-
-    CGFloat panelH =
-        MIN(
-            H * 0.48,
-            panelW * 0.30
-        );
-
-    panelH =
-        MAX(
-            H * 0.30,
-            panelH
-        );
-
-    CGFloat sideSpace =
-        MIN(
-            W * 0.065,
-            panelH * 0.50
-        );
-
-    CGFloat containerW =
-        MIN(
-            W * 0.94,
-            panelW + sideSpace * 2.0
-        );
-
-    CGFloat containerH =
-        panelH;
-
-    gOverspeedBannerContainer.bounds =
-        CGRectMake(
-            0.0,
-            0.0,
-            containerW,
-            containerH
-        );
-
-    gOverspeedBannerContainer.center =
-        CGPointMake(
-            CGRectGetMidX(canvas.bounds),
-            CGRectGetMidY(canvas.bounds)
-        );
-
-    CGFloat panelX =
-        (containerW - panelW) / 2.0;
-
-    gOverspeedBannerPanel.frame =
-        CGRectMake(
-            panelX,
-            0.0,
-            panelW,
-            panelH
-        );
-
-    CGFloat radius =
-        MAX(
-            10.0,
-            panelH * 0.14
-        );
-
-    CGFloat borderWidth =
-        MAX(
-            3.0,
-            panelH * 0.035
-        );
-
-    gOverspeedBannerPanel.layer.cornerRadius =
-        radius;
-
-    gOverspeedBannerPanel.layer.borderWidth =
-        borderWidth;
-
-    gOverspeedBannerPanel.layer.shadowOpacity =
-        0.70;
-
-    gOverspeedBannerPanel.layer.shadowRadius =
-        MAX(
-            4.0,
-            panelH * 0.08
-        );
-
-    gOverspeedBannerPanel.layer.shadowOffset =
-        CGSizeZero;
-
-    CGFloat iconSide =
-        panelH * 0.58;
-
-    CGFloat leftPadding =
-        panelH * 0.18;
-
-    if (gOverspeedFuelIcon) {
-        gOverspeedFuelIcon.frame =
-            CGRectMake(
-                leftPadding,
-                (panelH - iconSide) / 2.0,
-                iconSide,
-                iconSide
-            );
-    }
-
-    CGFloat textX =
-        leftPadding +
-        iconSide +
-        panelH * 0.13;
-
-    CGFloat rightPadding =
-        panelH * 0.16;
-
-    CGFloat textW =
-        MAX(
-            10.0,
-            panelW - textX - rightPadding
-        );
-
-    CGFloat titleH =
-        panelH * 0.43;
-
-    CGFloat subtitleH =
-        panelH * 0.35;
-
-    CGFloat totalTextH =
-        titleH + subtitleH;
-
-    CGFloat textY =
-        (panelH - totalTextH) / 2.0;
-
-    if (gOverspeedTitleLabel) {
-        gOverspeedTitleLabel.frame =
-            CGRectMake(
-                textX,
-                textY,
-                textW,
-                titleH
-            );
-
-        gOverspeedTitleLabel.font =
-            [UIFont systemFontOfSize:
-                MAX(
-                    14.0,
-                    panelH * 0.30
-                )
-                             weight:UIFontWeightHeavy];
-    }
-
-    if (gOverspeedSubtitleLabel) {
-        gOverspeedSubtitleLabel.frame =
-            CGRectMake(
-                textX,
-                textY + titleH,
-                textW,
-                subtitleH
-            );
-
-        gOverspeedSubtitleLabel.font =
-            [UIFont systemFontOfSize:
-                MAX(
-                    12.0,
-                    panelH * 0.245
-                )
-                             weight:UIFontWeightBold];
-    }
+    CGFloat iconSide = panelH * 0.58, left = panelH * 0.18;
+    gOverspeedFuelIcon.frame = CGRectMake(left, (panelH-iconSide)/2, iconSide, iconSide);
+    CGFloat textX = left + iconSide + panelH * 0.13;
+    CGFloat textW = MAX(10, panelW - textX - panelH * 0.16);
+    CGFloat titleH = panelH * 0.43, subtitleH = panelH * 0.35;
+    CGFloat textY = (panelH - titleH - subtitleH) / 2;
+    gOverspeedTitleLabel.frame = CGRectMake(textX, textY, textW, titleH);
+    gOverspeedTitleLabel.font = [UIFont systemFontOfSize:MAX(14, panelH*0.30) weight:UIFontWeightHeavy];
+    gOverspeedSubtitleLabel.frame = CGRectMake(textX, textY+titleH, textW, subtitleH);
+    gOverspeedSubtitleLabel.font = [UIFont systemFontOfSize:MAX(12, panelH*0.245) weight:UIFontWeightBold];
 
     if (gOverspeedWarningMarks.count == 4) {
-        CGFloat markW =
-            MAX(
-                7.0,
-                panelH * 0.17
-            );
-
-        CGFloat markH =
-            MAX(
-                4.0,
-                panelH * 0.055
-            );
-
-        CGFloat outerGap =
-            MAX(
-                4.0,
-                panelH * 0.065
-            );
-
-        CGFloat verticalOffset =
-            panelH * 0.17;
-
-        CGFloat leftCenterX =
-            panelX - outerGap - markW / 2.0;
-
-        CGFloat rightCenterX =
-            panelX + panelW + outerGap + markW / 2.0;
-
-        CGFloat centerY =
-            panelH / 2.0;
-
-        NSArray<NSValue *> *centers =
-            @[
-                [NSValue valueWithCGPoint:
-                    CGPointMake(
-                        leftCenterX,
-                        centerY - verticalOffset
-                    )],
-                [NSValue valueWithCGPoint:
-                    CGPointMake(
-                        leftCenterX,
-                        centerY + verticalOffset
-                    )],
-                [NSValue valueWithCGPoint:
-                    CGPointMake(
-                        rightCenterX,
-                        centerY - verticalOffset
-                    )],
-                [NSValue valueWithCGPoint:
-                    CGPointMake(
-                        rightCenterX,
-                        centerY + verticalOffset
-                    )]
-            ];
-
-        for (NSUInteger i = 0;
-             i < gOverspeedWarningMarks.count;
-             i++) {
-
-            UIView *mark =
-                gOverspeedWarningMarks[i];
-
-            mark.bounds =
-                CGRectMake(
-                    0.0,
-                    0.0,
-                    markW,
-                    markH
-                );
-
-            mark.center =
-                centers[i].CGPointValue;
-
-            mark.layer.cornerRadius =
-                markH / 2.0;
-
-            mark.layer.shadowOpacity =
-                0.75;
-
-            mark.layer.shadowRadius =
-                MAX(
-                    2.0,
-                    panelH * 0.04
-                );
-
-            mark.layer.shadowOffset =
-                CGSizeZero;
-
-            CGFloat angle =
-                (i == 0 || i == 3)
-                    ? -0.42
-                    : 0.42;
-
-            mark.transform =
-                CGAffineTransformMakeRotation(
-                    angle
-                );
+        CGFloat markW = MAX(7, panelH*0.17), markH = MAX(4, panelH*0.055);
+        CGFloat gap = MAX(4, panelH*0.065), offset = panelH*0.17, cy = panelH/2;
+        CGFloat lx = panelX-gap-markW/2, rx = panelX+panelW+gap+markW/2;
+        CGPoint points[4] = {{lx,cy-offset},{lx,cy+offset},{rx,cy-offset},{rx,cy+offset}};
+        for (NSUInteger i=0; i<4; i++) {
+            UIView *mark = gOverspeedWarningMarks[i];
+            mark.bounds = CGRectMake(0,0,markW,markH); mark.center = points[i];
+            mark.layer.cornerRadius = markH/2; mark.layer.shadowOpacity = 0.75;
+            mark.layer.shadowRadius = MAX(2,panelH*0.04); mark.layer.shadowOffset = CGSizeZero;
+            mark.transform = CGAffineTransformMakeRotation((i==0 || i==3) ? -0.42 : 0.42);
         }
     }
 }
 
 static void VMLAttachOverspeedBannerIfNeeded(void) {
-    if (!VMLIsCarPlayApp() ||
-        !gCarPlayOverlayWindow ||
-        !gCarPlayOverlayWindow.rootViewController) {
-
-        return;
-    }
-
-    UIView *canvas =
-        gCarPlayOverlayWindow.rootViewController.view;
-
-    if (!canvas)
-        return;
-
+    if (!VMLIsCarPlayApp() || !gCarPlayOverlayWindow.rootViewController) return;
+    UIView *canvas = gCarPlayOverlayWindow.rootViewController.view;
+    if (!canvas) return;
     if (!gOverspeedBannerContainer) {
-        UIView *container =
-            [[UIView alloc] initWithFrame:CGRectZero];
-
-        container.backgroundColor =
-            UIColor.clearColor;
-
-        container.userInteractionEnabled =
-            NO;
-
-        container.hidden =
-            YES;
-
-        container.alpha =
-            0.0;
-
-        UIView *panel =
-            [[UIView alloc] initWithFrame:CGRectZero];
-
-        panel.backgroundColor =
-            UIColor.blackColor;
-
-        panel.userInteractionEnabled =
-            NO;
-
-        panel.clipsToBounds =
-            NO;
-
-        [container addSubview:panel];
-
-        UIImageView *fuelIcon =
-            [[UIImageView alloc] initWithFrame:CGRectZero];
-
-        UIImage *fuelImage =
-            nil;
-
-        if (@available(iOS 13.0, *)) {
-            fuelImage =
-                [UIImage systemImageNamed:@"fuelpump.fill"];
-        }
-
-        fuelIcon.image =
-            fuelImage;
-
-        fuelIcon.contentMode =
-            UIViewContentModeScaleAspectFit;
-
-        [panel addSubview:fuelIcon];
-
-        UILabel *title =
-            [[UILabel alloc] initWithFrame:CGRectZero];
-
-        title.text =
-            @"XĂNG ĐANG TĂNG";
-
-        title.textAlignment =
-            NSTextAlignmentCenter;
-
-        title.adjustsFontSizeToFitWidth =
-            YES;
-
-        title.minimumScaleFactor =
-            0.68;
-
-        title.numberOfLines =
-            1;
-
-        [panel addSubview:title];
-
-        UILabel *subtitle =
-            [[UILabel alloc] initWithFrame:CGRectZero];
-
-        subtitle.text =
-            @"GIẢM TỐC ĐỘ ĐÊ!";
-
-        subtitle.textAlignment =
-            NSTextAlignmentCenter;
-
-        subtitle.adjustsFontSizeToFitWidth =
-            YES;
-
-        subtitle.minimumScaleFactor =
-            0.68;
-
-        subtitle.numberOfLines =
-            1;
-
-        [panel addSubview:subtitle];
-
-        NSMutableArray<UIView *> *marks =
-            [NSMutableArray arrayWithCapacity:4];
-
-        for (NSUInteger i = 0; i < 4; i++) {
-            UIView *mark =
-                [[UIView alloc] initWithFrame:CGRectZero];
-
-            mark.userInteractionEnabled =
-                NO;
-
-            [container addSubview:mark];
-
-            [marks addObject:mark];
-        }
-
+        UIView *container = [UIView new]; container.backgroundColor = UIColor.clearColor;
+        container.userInteractionEnabled = NO; container.hidden = YES; container.alpha = 0;
+        UIView *panel = [UIView new]; panel.backgroundColor = UIColor.blackColor;
+        panel.userInteractionEnabled = NO; panel.clipsToBounds = NO; [container addSubview:panel];
+        UIImageView *icon = [UIImageView new];
+        if (@available(iOS 13.0,*)) icon.image = [UIImage systemImageNamed:@"fuelpump.fill"];
+        icon.contentMode = UIViewContentModeScaleAspectFit; [panel addSubview:icon];
+        UILabel *title = [UILabel new]; title.text = @"XĂNG ĐANG TĂNG"; title.textAlignment = NSTextAlignmentCenter;
+        title.adjustsFontSizeToFitWidth = YES; title.minimumScaleFactor = 0.68; [panel addSubview:title];
+        UILabel *subtitle = [UILabel new]; subtitle.text = @"GIẢM TỐC ĐỘ ĐÊ!";
+        subtitle.textAlignment = NSTextAlignmentCenter; subtitle.adjustsFontSizeToFitWidth = YES;
+        subtitle.minimumScaleFactor = 0.68; [panel addSubview:subtitle];
+        NSMutableArray *marks = [NSMutableArray arrayWithCapacity:4];
+        for (NSUInteger i=0;i<4;i++) { UIView *mark=[UIView new]; mark.userInteractionEnabled=NO;
+            [container addSubview:mark]; [marks addObject:mark]; }
         [canvas addSubview:container];
-
-        gOverspeedBannerContainer =
-            container;
-
-        gOverspeedBannerPanel =
-            panel;
-
-        gOverspeedFuelIcon =
-            fuelIcon;
-
-        gOverspeedTitleLabel =
-            title;
-
-        gOverspeedSubtitleLabel =
-            subtitle;
-
-        gOverspeedWarningMarks =
-            marks;
-
-        VMLApplyOverspeedBannerColor(
-            VMLOverspeedYellowColor()
-        );
+        gOverspeedBannerContainer=container; gOverspeedBannerPanel=panel; gOverspeedFuelIcon=icon;
+        gOverspeedTitleLabel=title; gOverspeedSubtitleLabel=subtitle; gOverspeedWarningMarks=marks;
+        VMLApplyOverspeedBannerColor(VMLOverspeedYellowColor());
     } else if (gOverspeedBannerContainer.superview != canvas) {
-        [gOverspeedBannerContainer removeFromSuperview];
-
-        [canvas addSubview:
-            gOverspeedBannerContainer];
+        [gOverspeedBannerContainer removeFromSuperview]; [canvas addSubview:gOverspeedBannerContainer];
     }
-
     VMLLayoutOverspeedBanner();
-}
-
-static void VMLShowOverspeedBannerForPhase(BOOL yellowPhase) {
-    VMLAttachOverspeedBannerIfNeeded();
-
-    if (!gOverspeedBannerContainer)
-        return;
-
-    UIColor *color =
-        yellowPhase
-            ? VMLOverspeedYellowColor()
-            : VMLOverspeedBlueColor();
-
-    VMLApplyOverspeedBannerColor(
-        color
-    );
-
-    VMLLayoutOverspeedBanner();
-
-    gOverspeedBannerContainer.hidden =
-        NO;
-
-    gOverspeedBannerContainer.alpha =
-        1.0;
-
-    gOverspeedBannerContainer.layer.zPosition =
-        CGFLOAT_MAX - 2.0;
-
-    if (gOverspeedBannerContainer.superview) {
-        [gOverspeedBannerContainer.superview
-            bringSubviewToFront:
-                gOverspeedBannerContainer];
-
-        if (gCarPlayBubble) {
-            [gOverspeedBannerContainer.superview
-                bringSubviewToFront:
-                    gCarPlayBubble];
-        }
-    }
-}
-
-static void VMLHideOverspeedBannerImmediately(void) {
-    if (!gOverspeedBannerContainer)
-        return;
-
-    gOverspeedBannerContainer.alpha =
-        0.0;
-
-    gOverspeedBannerContainer.hidden =
-        YES;
 }
 
 static void VMLAttachOverspeedViewIfNeeded(void) {
-    if (!VMLIsCarPlayApp() ||
-        !gCarPlayOverlayWindow ||
-        !gCarPlayOverlayWindow.rootViewController) {
-
-        return;
-    }
-
-    UIView *canvas =
-        gCarPlayOverlayWindow.rootViewController.view;
-
-    if (!canvas)
-        return;
-
+    if (!VMLIsCarPlayApp() || !gCarPlayOverlayWindow.rootViewController) return;
+    UIView *canvas = gCarPlayOverlayWindow.rootViewController.view;
     if (!gOverspeedFlashView) {
-        UIView *flash =
-            [[UIView alloc] initWithFrame:canvas.bounds];
-
-        flash.autoresizingMask =
-            UIViewAutoresizingFlexibleWidth |
-            UIViewAutoresizingFlexibleHeight;
-
-        flash.backgroundColor =
-            [UIColor colorWithRed:1.0
-                            green:0.02
-                             blue:0.0
-                            alpha:1.0];
-
-        flash.userInteractionEnabled =
-            NO;
-
-        flash.hidden =
-            YES;
-
-        flash.alpha =
-            0.0;
-
-        [canvas insertSubview:flash
-                     atIndex:0];
-
-        gOverspeedFlashView =
-            flash;
+        UIView *flash = [[UIView alloc] initWithFrame:canvas.bounds];
+        flash.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        flash.backgroundColor = [UIColor colorWithRed:1 green:0.02 blue:0 alpha:1];
+        flash.userInteractionEnabled=NO; flash.hidden=YES; flash.alpha=0;
+        [canvas insertSubview:flash atIndex:0]; gOverspeedFlashView=flash;
     } else if (gOverspeedFlashView.superview != canvas) {
-        [gOverspeedFlashView removeFromSuperview];
-
-        gOverspeedFlashView.frame =
-            canvas.bounds;
-
-        [canvas insertSubview:gOverspeedFlashView
-                     atIndex:0];
+        [gOverspeedFlashView removeFromSuperview]; gOverspeedFlashView.frame=canvas.bounds;
+        [canvas insertSubview:gOverspeedFlashView atIndex:0];
     }
-
     VMLAttachOverspeedBannerIfNeeded();
 }
 
+static void VMLShowOverspeedBannerForPhase(BOOL yellow) {
+    VMLAttachOverspeedBannerIfNeeded();
+    if (!gOverspeedBannerContainer) return;
+    VMLApplyOverspeedBannerColor(yellow ? VMLOverspeedYellowColor() : VMLOverspeedBlueColor());
+    VMLLayoutOverspeedBanner();
+    gOverspeedBannerContainer.hidden=NO; gOverspeedBannerContainer.alpha=1;
+    gOverspeedBannerContainer.layer.zPosition=CGFLOAT_MAX-2;
+    [gOverspeedBannerContainer.superview bringSubviewToFront:gOverspeedBannerContainer];
+    [gOverspeedBannerContainer.superview bringSubviewToFront:gCarPlayBubble];
+}
+static void VMLHideOverspeedBannerImmediately(void) {
+    gOverspeedBannerContainer.alpha=0; gOverspeedBannerContainer.hidden=YES;
+}
+
 static void VMLOverspeedFlashTick(void) {
-    if (!VMLIsCarPlayApp()) {
-        gOverspeedFlashLoopRunning =
-            NO;
-        return;
-    }
-
+    if (!VMLIsCarPlayApp()) { gOverspeedFlashLoopRunning=NO; return; }
     VMLAttachOverspeedViewIfNeeded();
-
     if (gOverspeedActive) {
-        // One synchronized phase every 0.5 second:
-        // yellow -> blue -> yellow -> blue...
-        gOverspeedFlashOn =
-            !gOverspeedFlashOn;
-
-        if (gOverspeedFlashView) {
-            gOverspeedFlashView.hidden =
-                NO;
-
-            [UIView performWithoutAnimation:^{
-                gOverspeedFlashView.alpha =
-                    gOverspeedFlashOn
-                        ? 0.82
-                        : 0.30;
-            }];
-        }
-
-        VMLShowOverspeedBannerForPhase(
-            gOverspeedFlashOn
-        );
+        gOverspeedFlashOn=!gOverspeedFlashOn;
+        gOverspeedFlashView.hidden=NO;
+        [UIView performWithoutAnimation:^{ gOverspeedFlashView.alpha=gOverspeedFlashOn?0.82:0.30; }];
+        VMLShowOverspeedBannerForPhase(gOverspeedFlashOn);
     } else {
-        gOverspeedFlashOn =
-            NO;
-
-        if (gOverspeedFlashView) {
-            gOverspeedFlashView.alpha =
-                0.0;
-
-            gOverspeedFlashView.hidden =
-                YES;
-        }
-
-        // User requirement: no fade-out; disappear immediately
-        // the moment overspeed becomes false.
+        gOverspeedFlashOn=NO; gOverspeedFlashView.alpha=0; gOverspeedFlashView.hidden=YES;
         VMLHideOverspeedBannerImmediately();
     }
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            500 * NSEC_PER_MSEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLOverspeedFlashTick();
-        }
-    );
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,500*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+        VMLOverspeedFlashTick();
+    });
 }
-
 static void VMLStartOverspeedFlashLoop(void) {
-    if (!VMLIsCarPlayApp() ||
-        gOverspeedFlashLoopRunning) {
-
-        return;
-    }
-
-    gOverspeedFlashLoopRunning =
-        YES;
-
-    VMLOverspeedFlashTick();
+    if (!VMLIsCarPlayApp() || gOverspeedFlashLoopRunning) return;
+    gOverspeedFlashLoopRunning=YES; VMLOverspeedFlashTick();
 }
-
 static void VMLSetOverspeedActive(BOOL active) {
-    if (!VMLIsCarPlayApp())
-        return;
-
-    gOverspeedActive =
-        active;
-
-    VMLAttachOverspeedViewIfNeeded();
-
+    if (!VMLIsCarPlayApp()) return;
+    gOverspeedActive=active; VMLAttachOverspeedViewIfNeeded();
     if (!active) {
-        gOverspeedFlashOn =
-            NO;
-
-        if (gOverspeedFlashView) {
-            gOverspeedFlashView.alpha =
-                0.0;
-
-            gOverspeedFlashView.hidden =
-                YES;
-        }
-
+        gOverspeedFlashOn=NO; gOverspeedFlashView.alpha=0; gOverspeedFlashView.hidden=YES;
         VMLHideOverspeedBannerImmediately();
     } else {
-        // Show immediately on the first ON event instead of waiting
-        // for the next watchdog tick.
-        gOverspeedFlashOn =
-            YES;
-
-        if (gOverspeedFlashView) {
-            gOverspeedFlashView.hidden =
-                NO;
-
-            gOverspeedFlashView.alpha =
-                0.82;
-        }
-
-        VMLShowOverspeedBannerForPhase(
-            YES
-        );
+        gOverspeedFlashOn=YES; gOverspeedFlashView.hidden=NO; gOverspeedFlashView.alpha=0.82;
+        VMLShowOverspeedBannerForPhase(YES);
     }
-
-    VMLTrace(
-        @"SOS CARPLAY ACTIVE=%d",
-        active
-    );
+    VMLTrace(@"SOS CARPLAY ACTIVE=%d",active);
 }
-
 static void VMLStartOverspeedReceiver(void) {
-    if (!VMLIsCarPlayApp())
-        return;
-
-    if (gOverspeedOnToken == 0) {
-        int token = 0;
-
-        uint32_t status =
-            notify_register_dispatch(
-                "com.sushibta.vmlspeedbubble.overspeed.on",
-                &token,
-                dispatch_get_main_queue(),
-                ^(__unused int incomingToken) {
-                    VMLSetOverspeedActive(
-                        YES
-                    );
-                }
-            );
-
-        if (status == NOTIFY_STATUS_OK) {
-            gOverspeedOnToken =
-                token;
-        }
+    if (!VMLIsCarPlayApp()) return;
+    if (!gOverspeedOnToken) {
+        int token=0; if (notify_register_dispatch("com.sushibta.vmlspeedbubble.overspeed.on",&token,
+            dispatch_get_main_queue(),^(__unused int t){VMLSetOverspeedActive(YES);})==NOTIFY_STATUS_OK)
+            gOverspeedOnToken=token;
     }
-
-    if (gOverspeedOffToken == 0) {
-        int token = 0;
-
-        uint32_t status =
-            notify_register_dispatch(
-                "com.sushibta.vmlspeedbubble.overspeed.off",
-                &token,
-                dispatch_get_main_queue(),
-                ^(__unused int incomingToken) {
-                    VMLSetOverspeedActive(
-                        NO
-                    );
-                }
-            );
-
-        if (status == NOTIFY_STATUS_OK) {
-            gOverspeedOffToken =
-                token;
-        }
+    if (!gOverspeedOffToken) {
+        int token=0; if (notify_register_dispatch("com.sushibta.vmlspeedbubble.overspeed.off",&token,
+            dispatch_get_main_queue(),^(__unused int t){VMLSetOverspeedActive(NO);})==NOTIFY_STATUS_OK)
+            gOverspeedOffToken=token;
     }
-
     VMLStartOverspeedFlashLoop();
 }
 
-#pragma mark - VietMap CarPlay template scene receiver
+#pragma mark - VietMap CarPlay state
 
 static void VMLReadCarPlaySceneState(void) {
-    if (gVMLCarPlaySceneToken == 0)
-        return;
-
-    uint64_t state = 0;
-
-    uint32_t status =
-        notify_get_state(
-            gVMLCarPlaySceneToken,
-            &state
-        );
-
-    if (status != NOTIFY_STATUS_OK)
-        return;
-
-    BOOL active =
-        (state != 0);
-
-    if (active != gVMLCarPlaySceneActive) {
-        gVMLCarPlaySceneActive =
-            active;
-
-        VMLLog(
-            @"*** VML CPTEMPLATE ACTIVE ON CARPLAY = %d ***",
-            gVMLCarPlaySceneActive
-        );
+    if (!gVMLCarPlaySceneToken) return;
+    uint64_t state=0;
+    if (notify_get_state(gVMLCarPlaySceneToken,&state)!=NOTIFY_STATUS_OK) return;
+    BOOL active=state!=0;
+    if (active!=gVMLCarPlaySceneActive) {
+        gVMLCarPlaySceneActive=active;
+        VMLLog(@"*** VML CPTEMPLATE ACTIVE ON CARPLAY = %d ***",active);
     }
-
-    if (gCarPlayOverlayWindow) {
-        gCarPlayOverlayWindow.hidden =
-            gVMLCarPlaySceneActive;
-    }
+    gCarPlayOverlayWindow.hidden=active;
+    gDuoDashMirrorBubble.hidden=active;
 }
-
 static void VMLStartCarPlaySceneReceiver(void) {
-    if (gVMLCarPlaySceneToken != 0)
-        return;
-
-    int token = 0;
-
-    uint32_t status =
-        notify_register_dispatch(
-            "com.sushibta.vmlspeedbubble.vmlcarplaysceneactive",
-            &token,
-            dispatch_get_main_queue(),
-            ^(int incomingToken) {
-                gVMLCarPlaySceneToken =
-                    incomingToken;
-
-                VMLReadCarPlaySceneState();
-            }
-        );
-
-    if (status != NOTIFY_STATUS_OK) {
-        VMLLog(
-            @"cpscene receiver failed=%u",
-            status
-        );
-        return;
-    }
-
-    gVMLCarPlaySceneToken =
-        token;
-
-    VMLReadCarPlaySceneState();
-
-    VMLLog(
-        @"CPTEMPLATE SCENE RECEIVER ACTIVE token=%d",
-        token
-    );
+    if (gVMLCarPlaySceneToken) return;
+    int token=0;
+    uint32_t status=notify_register_dispatch("com.sushibta.vmlspeedbubble.vmlcarplaysceneactive",&token,
+        dispatch_get_main_queue(),^(int incoming){gVMLCarPlaySceneToken=incoming;VMLReadCarPlaySceneState();});
+    if (status!=NOTIFY_STATUS_OK) {VMLLog(@"cpscene receiver failed=%u",status);return;}
+    gVMLCarPlaySceneToken=token; VMLReadCarPlaySceneState();
+    VMLLog(@"CPTEMPLATE SCENE RECEIVER ACTIVE token=%d",token);
 }
 
-
-#pragma mark - CarPlay Scene
+#pragma mark - CarPlay scene / DuoDash host
 
 static BOOL VMLSceneLooksCarPlay(UIWindowScene *scene) {
-    if (!scene)
-        return NO;
-
-    NSString *role =
-        scene.session.role ?: @"";
-
-    if ([role localizedCaseInsensitiveContainsString:@"CarPlay"]) {
-        return YES;
-    }
-
-    CGSize size =
-        scene.screen.bounds.size;
-
-    // Fallback for this iOS/CarPlay implementation where role can be
-    // _UIScreenBasedSceneSession rather than a literal CarPlay role.
-    if (size.width > size.height &&
-        size.width >= 300.0 &&
-        size.height <= 500.0) {
-
-        return YES;
-    }
-
-    return NO;
+    if (!scene) return NO;
+    NSString *role=scene.session.role?:@"";
+    if ([role localizedCaseInsensitiveContainsString:@"CarPlay"]) return YES;
+    CGSize size=scene.screen.bounds.size;
+    return size.width>size.height && size.width>=300 && size.height<=500;
 }
 
 static UIWindowScene *VMLFindCarPlayScene(void) {
-    UIApplication *app =
-        UIApplication.sharedApplication;
-
-    // Có thể tồn tại NHIỀU scene cùng role CarPlay song song (dashboard chính,
-    // statusbar, và khi DuoDash/DuoPhone đang bridge nhiều pane thì mỗi pane
-    // cũng có thể là 1 scene riêng). Lấy scene đầu tiên khớp là không đáng tin —
-    // dễ bắt trúng 1 scene hẹp (vd Dock) thay vì scene rộng chứa nội dung
-    // chính. Duyệt hết ứng viên, chọn scene có DIỆN TÍCH lớn nhất, vì scene
-    // Main/toàn màn hình luôn rộng hơn hẳn các scene phụ (Dock, statusbar...).
-    UIWindowScene *best = nil;
-    CGFloat bestArea = -1;
-
-    for (UIScene *scene in app.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class])
-            continue;
-
-        UIWindowScene *ws =
-            (UIWindowScene *)scene;
-
-        if (!VMLSceneLooksCarPlay(ws))
-            continue;
-
-        CGSize size = ws.screen.bounds.size;
-        CGFloat area = size.width * size.height;
-
-        VMLLog(@"[overlay] candidate scene role=%@ size=%@ area=%.0f",
-               ws.session.role, NSStringFromCGSize(size), area);
-
-        if (area > bestArea) {
-            bestArea = area;
-            best = ws;
-        }
+    UIWindowScene *best=nil; CGFloat bestArea=-1;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *ws=(UIWindowScene *)scene;
+        if (!VMLSceneLooksCarPlay(ws)) continue;
+        CGSize size=ws.screen.bounds.size; CGFloat area=size.width*size.height;
+        if (area>bestArea) {bestArea=area;best=ws;}
     }
-
-    if (best) {
-        VMLLog(@"[overlay] chose scene size=%@ (largest of the candidates above)",
-               NSStringFromCGSize(best.screen.bounds.size));
-    }
-
     return best;
 }
 
-#pragma mark - Single CarPlay Overlay
-
-static void VMLDestroyOldOverlayIfNeeded(UIWindowScene *wantedScene) {
-    if (!gCarPlayOverlayWindow)
-        return;
-
-    if (gCarPlayOverlayWindow.windowScene == wantedScene)
-        return;
-
-    gCarPlayOverlayWindow.hidden = YES;
-    gCarPlayOverlayWindow.rootViewController = nil;
-    gCarPlayOverlayWindow = nil;
-    gCarPlayBubble = nil;
-
-    VMLLog(@"[overlay] discarded stale overlay window");
+static NSUInteger VMLHostedSceneLayerCount(UIView *view, NSUInteger depth) {
+    if (!view || depth>16) return 0;
+    NSString *name=NSStringFromClass(view.class);
+    NSUInteger count=([name containsString:@"_UISceneLayerHostContainerView"] ||
+                      [name containsString:@"UISceneLayerHostContainerView"]) ? 1 : 0;
+    for (UIView *child in view.subviews) count+=VMLHostedSceneLayerCount(child,depth+1);
+    return count;
 }
 
-
-static NSString *VMLCarPlayPosKeyX(void) {
-    return @"VMLSpeedBubble.CarPlayPosX";
+static UIWindow *VMLFindDuoDashHostWindow(UIWindowScene *scene, NSUInteger *hostCountOut) {
+    UIWindow *best=nil; NSUInteger bestCount=0; CGFloat bestLevel=-CGFLOAT_MAX;
+    for (UIWindow *window in scene.windows) {
+        if (!window || window==gCarPlayOverlayWindow || window.hidden || window.alpha<=0.01 ||
+            !window.rootViewController.view) continue;
+        NSUInteger count=VMLHostedSceneLayerCount(window.rootViewController.view,0);
+        // DuoDash has two independent hosted app surfaces. A normal CarPlay window
+        // generally has zero or one and must not receive the mirror.
+        if (count<2) continue;
+        if (count>bestCount || (count==bestCount && window.windowLevel>=bestLevel)) {
+            best=window; bestCount=count; bestLevel=window.windowLevel;
+        }
+    }
+    if (hostCountOut) *hostCountOut=bestCount;
+    return best;
 }
 
-static NSString *VMLCarPlayPosKeyY(void) {
-    return @"VMLSpeedBubble.CarPlayPosY";
+static void VMLRemoveDuoDashMirror(NSString *reason) {
+    if (gDuoDashMirrorBubble) {
+        [gDuoDashMirrorBubble removeFromSuperview];
+        gDuoDashMirrorBubble=nil;
+        VMLLog(@"[mirror] removed reason=%@",reason?:@"unknown");
+    }
+    gDuoDashHostWindow=nil; gLastDuoDashHostCount=0;
 }
 
+static void VMLRefreshDuoDashMirror(UIWindowScene *scene, CGRect sceneBubbleFrame, CGFloat size) {
+    NSUInteger hostCount=0;
+    UIWindow *host=VMLFindDuoDashHostWindow(scene,&hostCount);
+    UIView *canvas=host.rootViewController.view;
+    if (!host || !canvas) { VMLRemoveDuoDashMirror(@"no two-surface host"); return; }
+
+    if (host!=gDuoDashHostWindow || !gDuoDashMirrorBubble || gDuoDashMirrorBubble.superview!=canvas) {
+        [gDuoDashMirrorBubble removeFromSuperview];
+        UIView *mirror=VMLMakeBubble(kCarPlayBubbleTag+1,size);
+        mirror.userInteractionEnabled=NO;
+        [canvas addSubview:mirror];
+        gDuoDashMirrorBubble=mirror; gDuoDashHostWindow=host; gLastDuoDashHostCount=hostCount;
+        VMLLog(@"[mirror] ATTACHED host=%@ level=%.1f frame=%@ hostedSurfaces=%lu",
+               NSStringFromClass(host.class),host.windowLevel,NSStringFromCGRect(host.frame),(unsigned long)hostCount);
+    }
+
+    CGRect localFrame=[canvas convertRect:sceneBubbleFrame fromCoordinateSpace:scene.coordinateSpace];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    gDuoDashMirrorBubble.frame=localFrame;
+    gDuoDashMirrorBubble.layer.cornerRadius=size/2.0;
+    [CATransaction commit];
+    VMLUpdateOneBubble(gDuoDashMirrorBubble);
+}
+
+#pragma mark - Overlay / dragging
+
+static NSString *VMLCarPlayPosKeyX(void){return @"VMLSpeedBubble.CarPlayPosX";}
+static NSString *VMLCarPlayPosKeyY(void){return @"VMLSpeedBubble.CarPlayPosY";}
 static void VMLLoadCarPlayBubblePosition(void) {
-    if (gCarPlayBubblePositionLoaded)
-        return;
-
-    NSUserDefaults *defaults =
-        NSUserDefaults.standardUserDefaults;
-
-    CGFloat x =
-        [defaults doubleForKey:VMLCarPlayPosKeyX()];
-
-    CGFloat y =
-        [defaults doubleForKey:VMLCarPlayPosKeyY()];
-
-    if (x > 0.0 && x < 1.0 &&
-        y > 0.0 && y < 1.0) {
-
-        gCarPlayBubbleCenterRatio =
-            CGPointMake(x, y);
-    } else {
-        // Default close to the old V12/V13 location.
-        gCarPlayBubbleCenterRatio =
-            CGPointMake(0.08, 0.60);
-    }
-
-    gCarPlayBubblePositionLoaded =
-        YES;
+    if (gCarPlayBubblePositionLoaded) return;
+    NSUserDefaults *d=NSUserDefaults.standardUserDefaults;
+    CGFloat x=[d doubleForKey:VMLCarPlayPosKeyX()],y=[d doubleForKey:VMLCarPlayPosKeyY()];
+    gCarPlayBubbleCenterRatio=(x>0&&x<1&&y>0&&y<1)?CGPointMake(x,y):CGPointMake(0.08,0.60);
+    gCarPlayBubblePositionLoaded=YES;
 }
-
 static void VMLSaveCarPlayBubblePosition(void) {
-    if (!gCarPlayBubblePositionLoaded)
-        return;
-
-    NSUserDefaults *defaults =
-        NSUserDefaults.standardUserDefaults;
-
-    [defaults setDouble:gCarPlayBubbleCenterRatio.x
-                 forKey:VMLCarPlayPosKeyX()];
-
-    [defaults setDouble:gCarPlayBubbleCenterRatio.y
-                 forKey:VMLCarPlayPosKeyY()];
-
-    [defaults synchronize];
+    if (!gCarPlayBubblePositionLoaded) return;
+    NSUserDefaults *d=NSUserDefaults.standardUserDefaults;
+    [d setDouble:gCarPlayBubbleCenterRatio.x forKey:VMLCarPlayPosKeyX()];
+    [d setDouble:gCarPlayBubbleCenterRatio.y forKey:VMLCarPlayPosKeyY()]; [d synchronize];
+}
+static CGRect VMLCarPlayBubbleFrameForScene(CGRect bounds,CGFloat size) {
+    VMLLoadCarPlayBubblePosition(); CGFloat W=MAX(bounds.size.width,1),H=MAX(bounds.size.height,1),half=size/2;
+    CGFloat x=MAX(half+4,MIN(W-half-4,gCarPlayBubbleCenterRatio.x*W));
+    CGFloat y=MAX(half+4,MIN(H-half-4,gCarPlayBubbleCenterRatio.y*H));
+    return CGRectMake(x-half,y-half,size,size);
 }
 
-static CGRect VMLCarPlayBubbleFrameForScene(
-    CGRect sceneBounds,
-    CGFloat size
-) {
-    VMLLoadCarPlayBubblePosition();
-
-    CGFloat W =
-        MAX(sceneBounds.size.width, 1.0);
-
-    CGFloat H =
-        MAX(sceneBounds.size.height, 1.0);
-
-    CGFloat centerX =
-        gCarPlayBubbleCenterRatio.x * W;
-
-    CGFloat centerY =
-        gCarPlayBubbleCenterRatio.y * H;
-
-    CGFloat half =
-        size / 2.0;
-
-    centerX =
-        MAX(
-            half + 4.0,
-            MIN(
-                W - half - 4.0,
-                centerX
-            )
-        );
-
-    centerY =
-        MAX(
-            half + 4.0,
-            MIN(
-                H - half - 4.0,
-                centerY
-            )
-        );
-
-    return CGRectMake(
-        centerX - half,
-        centerY - half,
-        size,
-        size
-    );
-}
-
-static void VMLHandleCarPlayBubblePan(
-    UIPanGestureRecognizer *pan
-) {
-    if (!gCarPlayOverlayWindow ||
-        !gCarPlayBubble) {
-
-        return;
+static void VMLHandleCarPlayBubblePan(UIPanGestureRecognizer *pan) {
+    if (!gCarPlayOverlayWindow || !gCarPlayBubble) return;
+    UIView *canvas=gCarPlayOverlayWindow.rootViewController.view; if(!canvas)return;
+    UIGestureRecognizerState state=pan.state;
+    if(state==UIGestureRecognizerStateBegan){gCarPlayDragging=YES;gCarPlayBubble.layer.actions=@{@"position":[NSNull null],@"bounds":[NSNull null],@"frame":[NSNull null]};}
+    if(state==UIGestureRecognizerStateBegan||state==UIGestureRecognizerStateChanged){
+        CGPoint finger=[pan locationInView:canvas]; CGFloat hw=gCarPlayBubble.bounds.size.width/2,hh=gCarPlayBubble.bounds.size.height/2;
+        CGFloat W=MAX(canvas.bounds.size.width,1),H=MAX(canvas.bounds.size.height,1);
+        finger.x=MAX(hw+4,MIN(W-hw-4,finger.x)); finger.y=MAX(hh+4,MIN(H-hh-4,finger.y));
+        [UIView performWithoutAnimation:^{gCarPlayBubble.center=finger;}];
+        gCarPlayBubbleCenterRatio=CGPointMake(finger.x/W,finger.y/H);gCarPlayBubblePositionLoaded=YES;
+        UIWindowScene *scene=gCarPlayOverlayWindow.windowScene;
+        if(scene) VMLRefreshDuoDashMirror(scene,gCarPlayBubble.frame,gCarPlayBubble.bounds.size.width);
     }
-
-    UIView *canvas =
-        gCarPlayOverlayWindow.rootViewController.view;
-
-    if (!canvas)
-        return;
-
-    UIGestureRecognizerState state =
-        pan.state;
-
-    if (state == UIGestureRecognizerStateBegan) {
-        gCarPlayDragging = YES;
-
-        // From here until release, the overlay watchdog will not touch
-        // the bubble's geometry.
-        gCarPlayBubble.layer.actions =
-            @{
-                @"position": [NSNull null],
-                @"bounds": [NSNull null],
-                @"frame": [NSNull null]
-            };
-    }
-
-    if (state == UIGestureRecognizerStateBegan ||
-        state == UIGestureRecognizerStateChanged) {
-
-        CGPoint finger =
-            [pan locationInView:canvas];
-
-        CGFloat halfW =
-            gCarPlayBubble.bounds.size.width / 2.0;
-
-        CGFloat halfH =
-            gCarPlayBubble.bounds.size.height / 2.0;
-
-        CGFloat W =
-            MAX(canvas.bounds.size.width, 1.0);
-
-        CGFloat H =
-            MAX(canvas.bounds.size.height, 1.0);
-
-        finger.x =
-            MAX(
-                halfW + 4.0,
-                MIN(
-                    W - halfW - 4.0,
-                    finger.x
-                )
-            );
-
-        finger.y =
-            MAX(
-                halfH + 4.0,
-                MIN(
-                    H - halfH - 4.0,
-                    finger.y
-                )
-            );
-
-        [UIView performWithoutAnimation:^{
-            gCarPlayBubble.center =
-                finger;
-        }];
-
-        gCarPlayBubbleCenterRatio =
-            CGPointMake(
-                finger.x / W,
-                finger.y / H
-            );
-
-        gCarPlayBubblePositionLoaded =
-            YES;
-    }
-
-    if (state == UIGestureRecognizerStateEnded ||
-        state == UIGestureRecognizerStateCancelled ||
-        state == UIGestureRecognizerStateFailed) {
-
-        VMLSaveCarPlayBubblePosition();
-
-        gCarPlayDragging =
-            NO;
-
-        VMLLog(
-            @"*** CARPLAY BUBBLE MOVED x=%.3f y=%.3f ***",
-            gCarPlayBubbleCenterRatio.x,
-            gCarPlayBubbleCenterRatio.y
-        );
+    if(state==UIGestureRecognizerStateEnded||state==UIGestureRecognizerStateCancelled||state==UIGestureRecognizerStateFailed){
+        VMLSaveCarPlayBubblePosition();gCarPlayDragging=NO;
+        VMLLog(@"*** CARPLAY BUBBLE MOVED x=%.3f y=%.3f ***",gCarPlayBubbleCenterRatio.x,gCarPlayBubbleCenterRatio.y);
     }
 }
 
-
-@interface VMLCarPlayDragTarget : NSObject
+@interface VMLCarPlayDragTarget:NSObject
 - (void)handlePan:(UIPanGestureRecognizer *)pan;
 @end
-
 @implementation VMLCarPlayDragTarget
+- (void)handlePan:(UIPanGestureRecognizer *)pan{VMLHandleCarPlayBubblePan(pan);}
+@end
+static VMLCarPlayDragTarget *gCarPlayDragTarget=nil;
 
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    VMLHandleCarPlayBubblePan(pan);
+static void VMLDestroyOldOverlayIfNeeded(UIWindowScene *wantedScene) {
+    if(!gCarPlayOverlayWindow||gCarPlayOverlayWindow.windowScene==wantedScene)return;
+    VMLRemoveDuoDashMirror(@"scene changed");
+    gCarPlayOverlayWindow.hidden=YES;gCarPlayOverlayWindow.rootViewController=nil;
+    gCarPlayOverlayWindow=nil;gCarPlayBubble=nil;VMLLog(@"[overlay] discarded stale overlay window");
 }
 
-@end
-
-static VMLCarPlayDragTarget *gCarPlayDragTarget = nil;
-
-
 static void VMLPromoteOverlayAboveCarPlayWindows(UIWindowScene *scene) {
-    if (!scene || !gCarPlayOverlayWindow)
-        return;
-
-    CGFloat highestOtherLevel = UIWindowLevelAlert;
-
-    for (UIWindow *window in scene.windows) {
-        if (!window || window == gCarPlayOverlayWindow)
-            continue;
-
-        highestOtherLevel =
-            MAX(highestOtherLevel, window.windowLevel);
+    if(!scene||!gCarPlayOverlayWindow)return;
+    CGFloat highest=UIWindowLevelAlert;
+    for(UIWindow *w in scene.windows)if(w&&w!=gCarPlayOverlayWindow)highest=MAX(highest,w.windowLevel);
+    CGFloat target=MAX(UIWindowLevelAlert+100,highest+100);
+    if(fabs(gCarPlayOverlayWindow.windowLevel-target)>0.5){
+        gCarPlayOverlayWindow.windowLevel=target;
+        VMLLog(@"[overlay] promoted level=%.1f highestOther=%.1f windows=%lu",target,highest,(unsigned long)scene.windows.count);
     }
-
-    // DuoDash/rootless can add a later, higher CarPlay window over Main.
-    // Keep the bubble window above whatever is currently on this CarPlay scene.
-    CGFloat targetLevel =
-        MAX(
-            UIWindowLevelAlert + 100.0,
-            highestOtherLevel + 100.0
-        );
-
-    if (fabs(gCarPlayOverlayWindow.windowLevel - targetLevel) > 0.5) {
-        gCarPlayOverlayWindow.windowLevel =
-            targetLevel;
-
-        VMLLog(
-            @"[overlay] promoted level=%.1f highestOther=%.1f windows=%lu",
-            targetLevel,
-            highestOtherLevel,
-            (unsigned long)scene.windows.count
-        );
-    }
-
-    // Re-assert visibility/order because DuoDash may add/reorder its panes
-    // after our overlay was originally created.
-    if (!gVMLCarPlaySceneActive) {
-        gCarPlayOverlayWindow.hidden = NO;
-        gCarPlayOverlayWindow.alpha = 1.0;
-    }
+    if(!gVMLCarPlaySceneActive){gCarPlayOverlayWindow.hidden=NO;gCarPlayOverlayWindow.alpha=1;}
 }
 
 static void VMLCreateOrRefreshSingleOverlay(void) {
-    if (!VMLIsCarPlayApp())
-        return;
-
-    // Pull the latest shared valid speed every tick.
-    VMLReadSpeed();
+    if(!VMLIsCarPlayApp())return;
     VMLReadCarPlaySceneState();
-
-    UIWindowScene *scene =
-        VMLFindCarPlayScene();
-
-    if (!scene) {
-        VMLLog(@"[overlay] no CarPlay scene");
-        return;
-    }
-
+    UIWindowScene *scene=VMLFindCarPlayScene();
+    if(!scene){VMLRemoveDuoDashMirror(@"no CarPlay scene");return;}
     VMLDestroyOldOverlayIfNeeded(scene);
-
-    CGRect sceneBounds =
-        scene.coordinateSpace.bounds;
-
-    if (CGRectIsEmpty(sceneBounds)) {
-        sceneBounds =
-            scene.screen.bounds;
+    CGRect bounds=scene.coordinateSpace.bounds;if(CGRectIsEmpty(bounds))bounds=scene.screen.bounds;
+    CGFloat size=MAX(84,MIN(112,MAX(bounds.size.height,1)*0.40));
+    CGRect bubbleFrame=VMLCarPlayBubbleFrameForScene(bounds,size);
+    if(!gCarPlayOverlayWindow){
+        gCarPlayOverlayWindow=[[VMLPassthroughWindow alloc]initWithWindowScene:scene];
+        gCarPlayOverlayWindow.backgroundColor=UIColor.clearColor;gCarPlayOverlayWindow.windowLevel=UIWindowLevelAlert+100;
+        gCarPlayOverlayWindow.userInteractionEnabled=YES;
+        UIViewController *vc=[UIViewController new];vc.view.backgroundColor=UIColor.clearColor;vc.view.userInteractionEnabled=YES;
+        gCarPlayOverlayWindow.rootViewController=vc;
+        UIView *bubble=VMLMakeBubble(kCarPlayBubbleTag,size);bubble.frame=bubbleFrame;bubble.userInteractionEnabled=YES;[vc.view addSubview:bubble];
+        if(!gCarPlayDragTarget)gCarPlayDragTarget=[VMLCarPlayDragTarget new];
+        UIPanGestureRecognizer *pan=[[UIPanGestureRecognizer alloc]initWithTarget:gCarPlayDragTarget action:@selector(handlePan:)];
+        pan.cancelsTouchesInView=YES;pan.delaysTouchesBegan=NO;pan.delaysTouchesEnded=NO;
+        pan.minimumNumberOfTouches=1;pan.maximumNumberOfTouches=1;[bubble addGestureRecognizer:pan];
+        gCarPlayBubble=bubble;((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble=bubble;
+        VMLLog(@"*** CARPLAY OVERLAY CREATED V15.6 scene=%@ frame=%@ ***",NSStringFromCGRect(bounds),NSStringFromCGRect(bubbleFrame));
     }
-
-    CGFloat sceneH =
-        MAX(sceneBounds.size.height, 1.0);
-
-    CGFloat size =
-        MAX(
-            84.0,
-            MIN(
-                112.0,
-                sceneH * 0.40
-            )
-        );
-
-    CGRect bubbleFrame =
-        VMLCarPlayBubbleFrameForScene(
-            sceneBounds,
-            size
-        );
-
-    if (!gCarPlayOverlayWindow) {
-        gCarPlayOverlayWindow =
-            [[VMLPassthroughWindow alloc]
-                initWithWindowScene:scene];
-
-        gCarPlayOverlayWindow.backgroundColor =
-            UIColor.clearColor;
-
-        // Full-screen pass-through window: only the bubble itself receives touches.
-        // V15.5 will dynamically promote this above DuoDash/other CarPlay panes.
-        gCarPlayOverlayWindow.windowLevel =
-            UIWindowLevelAlert + 100.0;
-
-        gCarPlayOverlayWindow.userInteractionEnabled =
-            YES;
-
-        UIViewController *vc =
-            [UIViewController new];
-
-        vc.view.backgroundColor =
-            UIColor.clearColor;
-
-        vc.view.userInteractionEnabled =
-            YES;
-
-        gCarPlayOverlayWindow.rootViewController =
-            vc;
-
-        UIView *bubble =
-            VMLMakeBubble(
-                kCarPlayBubbleTag,
-                size
-            );
-
-        bubble.frame = bubbleFrame;
-
-        bubble.userInteractionEnabled =
-            YES;
-
-        [vc.view addSubview:bubble];
-
-        if (!gCarPlayDragTarget) {
-            gCarPlayDragTarget =
-                [VMLCarPlayDragTarget new];
-        }
-
-        UIPanGestureRecognizer *pan =
-            [[UIPanGestureRecognizer alloc]
-                initWithTarget:gCarPlayDragTarget
-                        action:@selector(handlePan:)];
-
-        pan.cancelsTouchesInView =
-            YES;
-
-        pan.delaysTouchesBegan =
-            NO;
-
-        pan.delaysTouchesEnded =
-            NO;
-
-        pan.minimumNumberOfTouches =
-            1;
-
-        pan.maximumNumberOfTouches =
-            1;
-
-        [bubble addGestureRecognizer:pan];
-
-
-        gCarPlayBubble =
-            bubble;
-
-        ((VMLPassthroughWindow *)gCarPlayOverlayWindow).interactiveBubble =
-            bubble;
-
-        VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V15.5 scene=%@ frame=%@ ***",
-            NSStringFromCGRect(sceneBounds),
-            NSStringFromCGRect(bubbleFrame)
-        );
-    }
-
-    gCarPlayOverlayWindow.frame =
-        sceneBounds;
-
-    gCarPlayOverlayWindow.rootViewController.view.frame =
-        CGRectMake(
-            0,
-            0,
-            sceneBounds.size.width,
-            sceneBounds.size.height
-        );
-
-    if (gCarPlayBubble) {
-        if (!gCarPlayDragging) {
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            gCarPlayBubble.frame =
-                bubbleFrame;
-            [CATransaction commit];
-        }
-
-        VMLUpdateBubble(
-            gCarPlayBubble
-        );
-    }
-
-    // Hide ONLY when VietMap itself owns a visible CarPlay-sized scene.
-    // Opening VietMap on the iPhone screen alone does not satisfy this.
-    gCarPlayOverlayWindow.hidden = gVMLCarPlaySceneActive;
-
-    if (!gVMLCarPlaySceneActive) {
-        VMLPromoteOverlayAboveCarPlayWindows(scene);
-    }
-
-    VMLAttachOverspeedViewIfNeeded();
-
-    VMLLayoutOverspeedBanner();
-
-    gCarPlayOverlayWindow.alpha =
-        1.0;
+    gCarPlayOverlayWindow.frame=bounds;
+    gCarPlayOverlayWindow.rootViewController.view.frame=CGRectMake(0,0,bounds.size.width,bounds.size.height);
+    if(!gCarPlayDragging){[CATransaction begin];[CATransaction setDisableActions:YES];gCarPlayBubble.frame=bubbleFrame;[CATransaction commit];}
+    VMLUpdateOneBubble(gCarPlayBubble);
+    gCarPlayOverlayWindow.hidden=gVMLCarPlaySceneActive;
+    if(!gVMLCarPlaySceneActive)VMLPromoteOverlayAboveCarPlayWindows(scene);
+    VMLRefreshDuoDashMirror(scene,bubbleFrame,size);
+    VMLAttachOverspeedViewIfNeeded();VMLLayoutOverspeedBanner();gCarPlayOverlayWindow.alpha=1;
 }
 
 static void VMLOverlayTick(void) {
-    if (!VMLIsCarPlayApp()) {
-        gOverlayLoopRunning = NO;
-        return;
-    }
-
-    // Critical for smooth drag: do zero overlay/layout work while the finger
-    // owns the bubble. Speed notify callbacks still update independently.
-    if (!gCarPlayDragging) {
-        VMLCreateOrRefreshSingleOverlay();
-    }
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            500 * NSEC_PER_MSEC
-        ),
-        dispatch_get_main_queue(),
-        ^{
-            VMLOverlayTick();
-        }
-    );
+    if(!VMLIsCarPlayApp()){gOverlayLoopRunning=NO;return;}
+    if(!gCarPlayDragging)VMLCreateOrRefreshSingleOverlay();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,500*NSEC_PER_MSEC),dispatch_get_main_queue(),^{VMLOverlayTick();});
 }
-
 static void VMLStartOverlayLoop(void) {
-    if (!VMLIsCarPlayApp() ||
-        gOverlayLoopRunning) {
-
-        return;
-    }
-
-    gOverlayLoopRunning = YES;
-
-    dispatch_async(
-        dispatch_get_main_queue(),
-        ^{
-            VMLOverlayTick();
-        }
-    );
+    if(!VMLIsCarPlayApp()||gOverlayLoopRunning)return;
+    gOverlayLoopRunning=YES;dispatch_async(dispatch_get_main_queue(),^{VMLOverlayTick();});
 }
-
-
 
 #pragma mark - Start
 
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.5 DUODASH TOPMOST OVERLAY");
-        VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
+        VMLLog(@"VML SPEED BUBBLE V15.6 DUODASH HOSTED-SCENE MIRROR");
+        VMLLog(@"bundle=%@ process=%@",VMLBundle(),VMLProcess());
         VMLLog(@"========================================");
-
-        if (VMLIsSpringBoard()) {
-            VMLLog(
-                @"*** SPRINGBOARD INJECTION CONFIRMED V12.6 ***"
-            );
-
-            VMLStartSpeedReceiver();
-            VMLStartEncodedSpeedReceiver();
-            VMLStartSpringBoardReplayResponder();
-            VMLStartSpringBoardRebroadcast();
-
-            
-            VMLLog(@"V15.5 SPRINGBOARD ACTIVE");
-            return;
+        if(VMLIsSpringBoard()){
+            VMLLog(@"*** SPRINGBOARD INJECTION CONFIRMED V15.6 ***");
+            VMLStartSpeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartSpringBoardReplayResponder();VMLStartSpringBoardRebroadcast();
+            VMLLog(@"V15.6 SPRINGBOARD ACTIVE");return;
         }
-
-        if (VMLIsCarPlayApp()) {
-            VMLStartOverspeedReceiver();
-            VMLStartEncodedSpeedReceiver();
-            VMLStartCarPlayReplayRequester();
-            VMLStartCarPlaySceneReceiver();
-            
-            VMLLog(
-                @"*** CARPLAY.APP INJECTION CONFIRMED V12.6 ***"
-            );
-
-            VMLStartSpeedReceiver();
-            VMLStartOverlayLoop();
-
-            VMLLog(
-                @"V15.5 CARPLAY ACTIVE"
-            );
-
-            return;
+        if(VMLIsCarPlayApp()){
+            VMLStartOverspeedReceiver();VMLStartEncodedSpeedReceiver();VMLStartCarPlayReplayRequester();
+            VMLStartCarPlaySceneReceiver();VMLStartOverlayLoop();
+            VMLLog(@"*** CARPLAY.APP INJECTION CONFIRMED V15.6 ***");
+            VMLLog(@"V15.6 CARPLAY ACTIVE");return;
         }
     }
 }
