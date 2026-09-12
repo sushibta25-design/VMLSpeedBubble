@@ -431,6 +431,249 @@ static void VMLScheduleClassDump(void) {
     );
 }
 
+
+
+// ============================================================
+// Focused VietMap method/property/ivar dump (V2)
+// ============================================================
+static NSString *VMLMethodDumpPath(void) {
+    NSString *documents = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+    return [documents stringByAppendingPathComponent:@"VMLMethodDump.txt"];
+}
+
+static NSString *VMLWarningTracePath(void) {
+    NSString *documents = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+    return [documents stringByAppendingPathComponent:@"VMLWarningTrace.txt"];
+}
+
+static void VMLAppendLineToPath(NSString *path, NSString *line, NSString *consolePrefix) {
+    if (!path || !line) return;
+    NSString *out = [line stringByAppendingString:@"\n"];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!fh) {
+        [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        NSData *data = [out dataUsingEncoding:NSUTF8StringEncoding];
+        [fh writeData:data];
+        [fh closeFile];
+    }
+    if (consolePrefix.length > 0) {
+        NSLog(@"%@ %@", consolePrefix, line);
+    }
+}
+
+static void VMLMethodDumpWrite(NSString *line) {
+    VMLAppendLineToPath(VMLMethodDumpPath(), line, @"[VMLMETHOD]");
+}
+
+static void VMLWarningTraceWrite(NSString *line) {
+    VMLAppendLineToPath(VMLWarningTracePath(), line, @"[VMLWARN]");
+}
+
+static Class VMLFindRuntimeClassNamed(NSString *target) {
+    if (target.length == 0) return Nil;
+
+    Class direct = NSClassFromString(target);
+    if (direct) return direct;
+
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return Nil;
+
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    if (!classes) return Nil;
+    count = objc_getClassList(classes, count);
+
+    Class found = Nil;
+    for (int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        const char *raw = cls ? class_getName(cls) : NULL;
+        if (!raw) continue;
+        NSString *name = [NSString stringWithUTF8String:raw];
+        if ([name isEqualToString:target]) {
+            found = cls;
+            break;
+        }
+    }
+    free(classes);
+    return found;
+}
+
+static void VMLDumpMethodsForClassObject(Class cls, BOOL classMethods) {
+    if (!cls) return;
+
+    Class owner = classMethods ? object_getClass(cls) : cls;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(owner, &count);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"%@ METHODS count=%u",
+                        classMethods ? @"CLASS" : @"INSTANCE", count]);
+
+    for (unsigned int i = 0; i < count; i++) {
+        Method m = methods[i];
+        SEL sel = method_getName(m);
+        const char *types = method_getTypeEncoding(m);
+        VMLMethodDumpWrite([NSString stringWithFormat:@"  %@ %@ | types=%s",
+                            classMethods ? @"+" : @"-",
+                            NSStringFromSelector(sel) ?: @"?",
+                            types ?: "?"]]);
+    }
+    if (methods) free(methods);
+}
+
+static void VMLDumpPropertiesForClass(Class cls) {
+    unsigned int count = 0;
+    objc_property_t *props = class_copyPropertyList(cls, &count);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"PROPERTIES count=%u", count]);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *name = property_getName(props[i]);
+        const char *attrs = property_getAttributes(props[i]);
+        VMLMethodDumpWrite([NSString stringWithFormat:@"  %@ | attrs=%s",
+                            name ? [NSString stringWithUTF8String:name] : @"?",
+                            attrs ?: "?"]]);
+    }
+    if (props) free(props);
+}
+
+static void VMLDumpIvarsForClass(Class cls) {
+    unsigned int count = 0;
+    Ivar *ivars = class_copyIvarList(cls, &count);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"IVARS count=%u", count]);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *name = ivar_getName(ivars[i]);
+        const char *type = ivar_getTypeEncoding(ivars[i]);
+        ptrdiff_t offset = ivar_getOffset(ivars[i]);
+        VMLMethodDumpWrite([NSString stringWithFormat:@"  %@ | type=%s offset=%td",
+                            name ? [NSString stringWithUTF8String:name] : @"?",
+                            type ?: "?", offset]);
+    }
+    if (ivars) free(ivars);
+}
+
+static void VMLDumpProtocolsForClass(Class cls) {
+    unsigned int count = 0;
+    __unsafe_unretained Protocol **protocols = class_copyProtocolList(cls, &count);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"PROTOCOLS count=%u", count]);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *name = protocol_getName(protocols[i]);
+        VMLMethodDumpWrite([NSString stringWithFormat:@"  %@",
+                            name ? [NSString stringWithUTF8String:name] : @"?"]]);
+    }
+    if (protocols) free(protocols);
+}
+
+static void VMLDumpOneTargetClass(NSString *target) {
+    Class cls = VMLFindRuntimeClassNamed(target);
+    VMLMethodDumpWrite(@"------------------------------------------------------------");
+    VMLMethodDumpWrite([NSString stringWithFormat:@"TARGET %@", target]);
+
+    if (!cls) {
+        VMLMethodDumpWrite(@"STATUS NOT FOUND");
+        return;
+    }
+
+    const char *imageRaw = class_getImageName(cls);
+    Class superCls = class_getSuperclass(cls);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"STATUS FOUND runtime=%@",
+                        NSStringFromClass(cls)]);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"IMAGE %@",
+                        imageRaw ? [NSString stringWithUTF8String:imageRaw] : @"?"]]);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"SUPER %@",
+                        superCls ? NSStringFromClass(superCls) : @"nil"]);
+
+    VMLDumpMethodsForClassObject(cls, NO);
+    VMLDumpMethodsForClassObject(cls, YES);
+    VMLDumpPropertiesForClass(cls);
+    VMLDumpIvarsForClass(cls);
+    VMLDumpProtocolsForClass(cls);
+}
+
+static void VMLDumpFocusedVietMapClasses(void) {
+    if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"vn.vietmap.live"])
+        return;
+
+    [[NSFileManager defaultManager] removeItemAtPath:VMLMethodDumpPath() error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:VMLWarningTracePath() error:nil];
+
+    VMLMethodDumpWrite(@"============================================================");
+    VMLMethodDumpWrite([NSString stringWithFormat:@"VML METHOD DUMP V2 bundle=%@ process=%@",
+                        NSBundle.mainBundle.bundleIdentifier ?: @"nil",
+                        NSProcessInfo.processInfo.processName ?: @"nil"]);
+
+    NSArray<NSString *> *targets = @[
+        @"Runner.VMLWarningWidget",
+        @"Runner.WarningAlertView",
+        @"Runner.SpeedLimitView",
+        @"Runner.JustSpeedLimitLayout",
+        @"vietmap_live_navigation_plugin.MapSymbolsController",
+        @"vietmap_live_navigation_plugin.NavigationTooltipController",
+        @"vietmap_live_navigation_plugin.MapRoutesController",
+        @"vietmap_live_navigation_plugin.TrafficRoute",
+        @"vietmap_live_navigation_plugin.MapRoute",
+        @"vietmap_live_navigation_plugin.VMLCarMapControllerV3",
+        @"vietmap_live_navigation_plugin.CarMapControllerV3",
+        @"vietmap_live_navigation_plugin.VIETMAPCarPlayManager2"
+    ];
+
+    for (NSString *target in targets) {
+        VMLDumpOneTargetClass(target);
+    }
+
+    VMLMethodDumpWrite(@"============================================================");
+    VMLLog(@"METHOD DUMP V2 COMPLETE path=%@", VMLMethodDumpPath());
+}
+
+static void VMLScheduleFocusedMethodDump(void) {
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            VMLDumpFocusedVietMapClasses();
+        }
+    );
+}
+
+static BOOL VMLStringLooksWarningRelated(NSString *s) {
+    if (s.length == 0) return NO;
+    NSString *lower = s.lowercaseString;
+    NSArray<NSString *> *keys = @[
+        @"warning", @"warn", @"sign", @"traffic", @"route", @"tooltip",
+        @"parking", @"park", @"stop", @"restriction", @"road", @"speedlimit",
+        @"speed_limit", @"limit", @"symbol", @"camera"
+    ];
+    for (NSString *key in keys) {
+        if ([lower containsString:key]) return YES;
+    }
+    return NO;
+}
+
+static BOOL VMLObjectLooksWarningRelated(id obj) {
+    if (!obj) return NO;
+    if ([obj isKindOfClass:NSString.class]) {
+        return VMLStringLooksWarningRelated((NSString *)obj);
+    }
+    if ([obj isKindOfClass:NSDictionary.class]) {
+        NSDictionary *dict = (NSDictionary *)obj;
+        for (id key in dict.allKeys) {
+            if (VMLStringLooksWarningRelated([key description])) return YES;
+            id value = dict[key];
+            if ([value isKindOfClass:NSString.class] &&
+                VMLStringLooksWarningRelated((NSString *)value)) return YES;
+        }
+    }
+    return NO;
+}
+
+static NSString *VMLSafeDescription(id obj) {
+    if (!obj) return @"nil";
+    NSString *desc = nil;
+    @try { desc = [obj description]; } @catch (__unused NSException *e) { desc = @"<description threw>"; }
+    if (!desc) desc = @"nil";
+    // Keep one event from exploding the log file.
+    if (desc.length > 12000) {
+        desc = [[desc substringToIndex:12000] stringByAppendingString:@" ...<truncated>"];
+    }
+    return desc;
+}
+
 static void VMLTrace(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -690,6 +933,17 @@ static id VMLHookMethodCallInit(
             );
     }
 
+    // V2: capture Flutter traffic-sign / warning / route traffic without
+    // changing VietMap behavior. This is observation-only.
+    if (VMLStringLooksWarningRelated(methodName) || VMLObjectLooksWarningRelated(arguments)) {
+        VMLWarningTraceWrite([NSString stringWithFormat:
+            @"FLUTTER method=%@ argsClass=%@ args=%@",
+            methodName ?: @"nil",
+            arguments ? NSStringFromClass([arguments class]) : @"nil",
+            VMLSafeDescription(arguments)
+        ]);
+    }
+
     NSInteger speed = -1;
 
     if ([methodName isEqualToString:@"updateCurrentSpeed"]) {
@@ -897,6 +1151,7 @@ static void VMLStart(void) {
     VMLInstallPhoneForegroundObservers();
     VMLStartCarPlayTemplateSceneWatcher();
     VMLScheduleClassDump();
+    VMLScheduleFocusedMethodDump();
 
 
 

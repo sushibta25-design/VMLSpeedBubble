@@ -19,3 +19,10 @@ When overspeed becomes false:
 - the alert banner disappears immediately (no fade-out).
 
 The speed-limit bubble behavior is otherwise unchanged from V15.3.
+
+## VML Method Dump V2
+This diagnostic build keeps the existing runtime sniffer and additionally writes:
+- `Documents/VMLMethodDump.txt`: methods/properties/ivars for focused VietMap warning/route/map classes.
+- `Documents/VMLWarningTrace.txt`: Flutter calls whose method names or payload keys look related to warning/sign/traffic/route/parking/stop/speed-limit data.
+
+Open VietMap Live, wait ~8 seconds for the method dump, then reproduce a route that displays a no-parking/no-stopping sign and collect both files.
