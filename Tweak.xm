@@ -1745,6 +1745,49 @@ static void VMLHandleCarPlayBubblePan(
 
 static VMLCarPlayDragTarget *gCarPlayDragTarget = nil;
 
+
+static void VMLPromoteOverlayAboveCarPlayWindows(UIWindowScene *scene) {
+    if (!scene || !gCarPlayOverlayWindow)
+        return;
+
+    CGFloat highestOtherLevel = UIWindowLevelAlert;
+
+    for (UIWindow *window in scene.windows) {
+        if (!window || window == gCarPlayOverlayWindow)
+            continue;
+
+        highestOtherLevel =
+            MAX(highestOtherLevel, window.windowLevel);
+    }
+
+    // DuoDash/rootless can add a later, higher CarPlay window over Main.
+    // Keep the bubble window above whatever is currently on this CarPlay scene.
+    CGFloat targetLevel =
+        MAX(
+            UIWindowLevelAlert + 100.0,
+            highestOtherLevel + 100.0
+        );
+
+    if (fabs(gCarPlayOverlayWindow.windowLevel - targetLevel) > 0.5) {
+        gCarPlayOverlayWindow.windowLevel =
+            targetLevel;
+
+        VMLLog(
+            @"[overlay] promoted level=%.1f highestOther=%.1f windows=%lu",
+            targetLevel,
+            highestOtherLevel,
+            (unsigned long)scene.windows.count
+        );
+    }
+
+    // Re-assert visibility/order because DuoDash may add/reorder its panes
+    // after our overlay was originally created.
+    if (!gVMLCarPlaySceneActive) {
+        gCarPlayOverlayWindow.hidden = NO;
+        gCarPlayOverlayWindow.alpha = 1.0;
+    }
+}
+
 static void VMLCreateOrRefreshSingleOverlay(void) {
     if (!VMLIsCarPlayApp())
         return;
@@ -1798,6 +1841,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             UIColor.clearColor;
 
         // Full-screen pass-through window: only the bubble itself receives touches.
+        // V15.5 will dynamically promote this above DuoDash/other CarPlay panes.
         gCarPlayOverlayWindow.windowLevel =
             UIWindowLevelAlert + 100.0;
 
@@ -1864,7 +1908,7 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
             bubble;
 
         VMLLog(
-            @"*** CLEAN CARPLAY OVERLAY CREATED V15.4 scene=%@ frame=%@ ***",
+            @"*** CLEAN CARPLAY OVERLAY CREATED V15.5 scene=%@ frame=%@ ***",
             NSStringFromCGRect(sceneBounds),
             NSStringFromCGRect(bubbleFrame)
         );
@@ -1898,6 +1942,10 @@ static void VMLCreateOrRefreshSingleOverlay(void) {
     // Hide ONLY when VietMap itself owns a visible CarPlay-sized scene.
     // Opening VietMap on the iPhone screen alone does not satisfy this.
     gCarPlayOverlayWindow.hidden = gVMLCarPlaySceneActive;
+
+    if (!gVMLCarPlaySceneActive) {
+        VMLPromoteOverlayAboveCarPlayWindows(scene);
+    }
 
     VMLAttachOverspeedViewIfNeeded();
 
@@ -1955,7 +2003,7 @@ static void VMLStartOverlayLoop(void) {
 %ctor {
     @autoreleasepool {
         VMLLog(@"========================================");
-        VMLLog(@"VML SPEED BUBBLE V15.4 RESPONSIVE FUEL ALERT");
+        VMLLog(@"VML SPEED BUBBLE V15.5 DUODASH TOPMOST OVERLAY");
         VMLLog(@"bundle=%@ process=%@", VMLBundle(), VMLProcess());
         VMLLog(@"========================================");
 
@@ -1970,7 +2018,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartSpringBoardRebroadcast();
 
             
-            VMLLog(@"V15.4 SPRINGBOARD ACTIVE");
+            VMLLog(@"V15.5 SPRINGBOARD ACTIVE");
             return;
         }
 
@@ -1988,7 +2036,7 @@ static void VMLStartOverlayLoop(void) {
             VMLStartOverlayLoop();
 
             VMLLog(
-                @"V15.4 CARPLAY ACTIVE"
+                @"V15.5 CARPLAY ACTIVE"
             );
 
             return;
