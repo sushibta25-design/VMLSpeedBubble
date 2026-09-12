@@ -6,4 +6,4 @@ Description: VML Speed Bubble V15.4 - responsive centered overspeed fuel alert b
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
-Depends: mobilesubstrate
+Depends: mobilesubstrate | ellekit
