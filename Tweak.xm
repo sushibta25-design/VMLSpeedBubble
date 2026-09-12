@@ -1475,6 +1475,15 @@ static UIWindowScene *VMLFindCarPlayScene(void) {
     UIApplication *app =
         UIApplication.sharedApplication;
 
+    // Có thể tồn tại NHIỀU scene cùng role CarPlay song song (dashboard chính,
+    // statusbar, và khi DuoDash/DuoPhone đang bridge nhiều pane thì mỗi pane
+    // cũng có thể là 1 scene riêng). Lấy scene đầu tiên khớp là không đáng tin —
+    // dễ bắt trúng 1 scene hẹp (vd Dock) thay vì scene rộng chứa nội dung
+    // chính. Duyệt hết ứng viên, chọn scene có DIỆN TÍCH lớn nhất, vì scene
+    // Main/toàn màn hình luôn rộng hơn hẳn các scene phụ (Dock, statusbar...).
+    UIWindowScene *best = nil;
+    CGFloat bestArea = -1;
+
     for (UIScene *scene in app.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class])
             continue;
@@ -1482,12 +1491,27 @@ static UIWindowScene *VMLFindCarPlayScene(void) {
         UIWindowScene *ws =
             (UIWindowScene *)scene;
 
-        if (VMLSceneLooksCarPlay(ws)) {
-            return ws;
+        if (!VMLSceneLooksCarPlay(ws))
+            continue;
+
+        CGSize size = ws.screen.bounds.size;
+        CGFloat area = size.width * size.height;
+
+        VMLLog(@"[overlay] candidate scene role=%@ size=%@ area=%.0f",
+               ws.session.role, NSStringFromCGSize(size), area);
+
+        if (area > bestArea) {
+            bestArea = area;
+            best = ws;
         }
     }
 
-    return nil;
+    if (best) {
+        VMLLog(@"[overlay] chose scene size=%@ (largest of the candidates above)",
+               NSStringFromCGSize(best.screen.bounds.size));
+    }
+
+    return best;
 }
 
 #pragma mark - Single CarPlay Overlay
