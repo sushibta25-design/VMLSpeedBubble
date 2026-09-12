@@ -12,7 +12,7 @@ VMLSpeedBubble_FRAMEWORKS = UIKit Foundation QuartzCore
 
 VMLRuntimeSniffer_FILES = RuntimeSniffer.xm
 VMLRuntimeSniffer_CFLAGS = -fobjc-arc -Werror
-VMLRuntimeSniffer_FRAMEWORKS = UIKit Foundation
+VMLRuntimeSniffer_FRAMEWORKS = UIKit Foundation CoreLocation
 VMLRuntimeSniffer_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk

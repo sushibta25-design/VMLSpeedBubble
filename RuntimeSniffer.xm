@@ -3,6 +3,9 @@
 #import <objc/runtime.h>
 #import <notify.h>
 #import <mach-o/dyld.h>
+#import <CoreLocation/CoreLocation.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
 
 
@@ -1123,6 +1126,293 @@ static void VMLDyldImageAdded(
     );
 }
 
+
+
+// ============================================================
+// VML GPS REPLAY V3
+// Scope: only this injected VietMap Live process.
+// Config: <VietMap sandbox>/Documents/VMLGPSReplay.txt
+// ============================================================
+
+static BOOL gVMLGPSReplayEnabled = NO;
+static BOOL gVMLGPSReplayLoop = YES;
+static double gVMLGPSReplaySpeedKmh = 30.0;
+static double gVMLGPSReplayInterval = 1.0;
+static NSMutableArray<NSValue *> *gVMLGPSRoute = nil;
+static NSInteger gVMLGPSSegmentIndex = 0;
+static double gVMLGPSSegmentOffsetM = 0.0;
+static CLLocation *gVMLGPSFakeLocation = nil;
+static NSDate *gVMLGPSConfigMTime = nil;
+static NSHashTable *gVMLGPSManagers = nil;
+
+static NSString *VMLGPSReplayPath(void) {
+    return [[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"]
+            stringByAppendingPathComponent:@"VMLGPSReplay.txt"];
+}
+
+static NSString *VMLGPSReplayLogPath(void) {
+    return [[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"]
+            stringByAppendingPathComponent:@"VMLGPSReplayLog.txt"];
+}
+
+static void VMLGPSLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *path = VMLGPSReplayLogPath();
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [data writeToFile:path atomically:YES];
+    } else {
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (fh) {
+            [fh seekToEndOfFile];
+            [fh writeData:data];
+            [fh closeFile];
+        }
+    }
+    VMLLog(@"GPSREPLAY %@", msg);
+}
+
+static double VMLGPSDeg2Rad(double d) { return d * M_PI / 180.0; }
+static double VMLGPSRad2Deg(double r) { return r * 180.0 / M_PI; }
+
+static double VMLGPSDistance(CLLocationCoordinate2D a, CLLocationCoordinate2D b) {
+    const double R = 6371000.0;
+    double p1 = VMLGPSDeg2Rad(a.latitude);
+    double p2 = VMLGPSDeg2Rad(b.latitude);
+    double dp = VMLGPSDeg2Rad(b.latitude - a.latitude);
+    double dl = VMLGPSDeg2Rad(b.longitude - a.longitude);
+    double x = sin(dp/2.0)*sin(dp/2.0) + cos(p1)*cos(p2)*sin(dl/2.0)*sin(dl/2.0);
+    return R * 2.0 * atan2(sqrt(x), sqrt(1.0-x));
+}
+
+static double VMLGPSBearing(CLLocationCoordinate2D a, CLLocationCoordinate2D b) {
+    double p1 = VMLGPSDeg2Rad(a.latitude), p2 = VMLGPSDeg2Rad(b.latitude);
+    double dl = VMLGPSDeg2Rad(b.longitude - a.longitude);
+    double y = sin(dl) * cos(p2);
+    double x = cos(p1)*sin(p2) - sin(p1)*cos(p2)*cos(dl);
+    double d = fmod(VMLGPSRad2Deg(atan2(y,x)) + 360.0, 360.0);
+    return d;
+}
+
+static CLLocationCoordinate2D VMLGPSInterpolate(CLLocationCoordinate2D a, CLLocationCoordinate2D b, double t) {
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    return CLLocationCoordinate2DMake(a.latitude + (b.latitude-a.latitude)*t,
+                                      a.longitude + (b.longitude-a.longitude)*t);
+}
+
+static void VMLGPSWriteSampleConfigIfNeeded(void) {
+    NSString *path = VMLGPSReplayPath();
+    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) return;
+    NSString *sample =
+    @"# VML GPS Replay V3\n"
+    @"# 1) Doi enabled=1\n"
+    @"# 2) Them it nhat 2 diem lat,lon o cuoi file\n"
+    @"# 3) Co the sua file khi VML dang mo; tweak tu reload\n"
+    @"enabled=0\n"
+    @"speed_kmh=30\n"
+    @"interval=1.0\n"
+    @"loop=1\n"
+    @"# route: latitude,longitude\n"
+    @"# 10.000000,106.000000\n"
+    @"# 10.001000,106.001000\n";
+    [sample writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+static void VMLGPSLoadConfig(BOOL force) {
+    NSString *path = VMLGPSReplayPath();
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    NSDate *mtime = attrs[NSFileModificationDate];
+    if (!force && gVMLGPSConfigMTime && mtime && [mtime isEqualToDate:gVMLGPSConfigMTime]) return;
+    gVMLGPSConfigMTime = mtime;
+
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!text) return;
+
+    BOOL enabled = NO, loop = YES;
+    double speed = 30.0, interval = 1.0;
+    NSMutableArray<NSValue *> *route = [NSMutableArray array];
+
+    for (NSString *raw in [text componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
+        if ([line hasPrefix:@"enabled="]) { enabled = [[[line componentsSeparatedByString:@"="] lastObject] integerValue] != 0; continue; }
+        if ([line hasPrefix:@"speed_kmh="]) { speed = [[[line componentsSeparatedByString:@"="] lastObject] doubleValue]; continue; }
+        if ([line hasPrefix:@"interval="]) { interval = [[[line componentsSeparatedByString:@"="] lastObject] doubleValue]; continue; }
+        if ([line hasPrefix:@"loop="]) { loop = [[[line componentsSeparatedByString:@"="] lastObject] integerValue] != 0; continue; }
+        NSArray<NSString *> *parts = [line componentsSeparatedByString:@","];
+        if (parts.count >= 2) {
+            double lat = [parts[0] doubleValue], lon = [parts[1] doubleValue];
+            if (fabs(lat) <= 90.0 && fabs(lon) <= 180.0 && (lat != 0.0 || lon != 0.0)) {
+                CLLocationCoordinate2D c = CLLocationCoordinate2DMake(lat, lon);
+                [route addObject:[NSValue valueWithBytes:&c objCType:@encode(CLLocationCoordinate2D)]];
+            }
+        }
+    }
+
+    BOOL routeChanged = (gVMLGPSRoute.count != route.count);
+    gVMLGPSReplayEnabled = enabled && route.count >= 2;
+    gVMLGPSReplayLoop = loop;
+    gVMLGPSReplaySpeedKmh = MAX(1.0, MIN(speed, 200.0));
+    gVMLGPSReplayInterval = MAX(0.2, MIN(interval, 5.0));
+    gVMLGPSRoute = route;
+
+    if (routeChanged || force) {
+        gVMLGPSSegmentIndex = 0;
+        gVMLGPSSegmentOffsetM = 0.0;
+        gVMLGPSFakeLocation = nil;
+    }
+
+    VMLGPSLog(@"CONFIG enabled=%d points=%lu speed=%.1fkmh interval=%.2fs loop=%d",
+              gVMLGPSReplayEnabled, (unsigned long)route.count,
+              gVMLGPSReplaySpeedKmh, gVMLGPSReplayInterval, gVMLGPSReplayLoop);
+}
+
+static CLLocationCoordinate2D VMLGPSCoordAt(NSInteger idx) {
+    CLLocationCoordinate2D c = kCLLocationCoordinate2DInvalid;
+    if (idx >= 0 && idx < (NSInteger)gVMLGPSRoute.count) {
+        [gVMLGPSRoute[idx] getValue:&c];
+    }
+    return c;
+}
+
+static CLLocation *VMLGPSBuildNextLocation(void) {
+    if (!gVMLGPSReplayEnabled || gVMLGPSRoute.count < 2) return nil;
+
+    double advance = (gVMLGPSReplaySpeedKmh / 3.6) * gVMLGPSReplayInterval;
+    while (advance >= 0.0) {
+        if (gVMLGPSSegmentIndex >= (NSInteger)gVMLGPSRoute.count - 1) {
+            if (gVMLGPSReplayLoop) {
+                gVMLGPSSegmentIndex = 0;
+                gVMLGPSSegmentOffsetM = 0.0;
+            } else {
+                gVMLGPSReplayEnabled = NO;
+                VMLGPSLog(@"ROUTE FINISHED");
+                return gVMLGPSFakeLocation;
+            }
+        }
+
+        CLLocationCoordinate2D a = VMLGPSCoordAt(gVMLGPSSegmentIndex);
+        CLLocationCoordinate2D b = VMLGPSCoordAt(gVMLGPSSegmentIndex + 1);
+        double seg = VMLGPSDistance(a,b);
+        if (seg < 0.5) { gVMLGPSSegmentIndex++; gVMLGPSSegmentOffsetM = 0; continue; }
+
+        double remaining = seg - gVMLGPSSegmentOffsetM;
+        if (advance > remaining) {
+            advance -= remaining;
+            gVMLGPSSegmentIndex++;
+            gVMLGPSSegmentOffsetM = 0.0;
+            continue;
+        }
+
+        gVMLGPSSegmentOffsetM += advance;
+        double t = gVMLGPSSegmentOffsetM / seg;
+        CLLocationCoordinate2D c = VMLGPSInterpolate(a,b,t);
+        double course = VMLGPSBearing(a,b);
+        CLLocation *loc = [[CLLocation alloc] initWithCoordinate:c
+                                                        altitude:10.0
+                                              horizontalAccuracy:3.0
+                                                verticalAccuracy:5.0
+                                                          course:course
+                                                           speed:(gVMLGPSReplaySpeedKmh/3.6)
+                                                       timestamp:[NSDate date]];
+        gVMLGPSFakeLocation = loc;
+        return loc;
+    }
+    return nil;
+}
+
+@interface VMLLocationDelegateProxy : NSObject <CLLocationManagerDelegate>
+@property (nonatomic, weak) id originalDelegate;
+@end
+
+@implementation VMLLocationDelegateProxy
+- (BOOL)respondsToSelector:(SEL)aSelector {
+    if (aSelector == @selector(locationManager:didUpdateLocations:)) return YES;
+    return [super respondsToSelector:aSelector] || [self.originalDelegate respondsToSelector:aSelector];
+}
+- (id)forwardingTargetForSelector:(SEL)aSelector { return self.originalDelegate; }
+- (void)locationManager:(CLLocationManager *)manager didUpdateLocations:(NSArray<CLLocation *> *)locations {
+    id d = self.originalDelegate;
+    if (![d respondsToSelector:_cmd]) return;
+    NSArray *send = locations;
+    if (gVMLGPSReplayEnabled && gVMLGPSFakeLocation) send = @[gVMLGPSFakeLocation];
+    ((void(*)(id,SEL,id,id))objc_msgSend)(d, _cmd, manager, send);
+}
+@end
+
+static const void *kVMLGPSProxyKey = &kVMLGPSProxyKey;
+
+static void VMLGPSRegisterManager(CLLocationManager *manager) {
+    if (!manager) return;
+    if (!gVMLGPSManagers) gVMLGPSManagers = [NSHashTable weakObjectsHashTable];
+    @synchronized(gVMLGPSManagers) { [gVMLGPSManagers addObject:manager]; }
+}
+
+static void VMLGPSBroadcast(CLLocation *loc) {
+    if (!loc || !gVMLGPSReplayEnabled) return;
+    NSArray *managers;
+    @synchronized(gVMLGPSManagers) { managers = gVMLGPSManagers.allObjects; }
+    for (CLLocationManager *m in managers) {
+        VMLLocationDelegateProxy *proxy = objc_getAssociatedObject(m, kVMLGPSProxyKey);
+        id d = proxy.originalDelegate;
+        SEL sel = @selector(locationManager:didUpdateLocations:);
+        if (d && [d respondsToSelector:sel]) {
+            ((void(*)(id,SEL,id,id))objc_msgSend)(d, sel, m, @[loc]);
+        }
+    }
+    VMLGPSLog(@"FIX lat=%.6f lon=%.6f speed=%.1f course=%.0f seg=%ld",
+              loc.coordinate.latitude, loc.coordinate.longitude,
+              loc.speed*3.6, loc.course, (long)gVMLGPSSegmentIndex);
+}
+
+static void VMLGPSStartReplayTimer(void) {
+    VMLGPSWriteSampleConfigIfNeeded();
+    VMLGPSLoadConfig(YES);
+    __block double acc = 0.0;
+    [NSTimer scheduledTimerWithTimeInterval:0.20 repeats:YES block:^(__unused NSTimer *timer) {
+        VMLGPSLoadConfig(NO);
+        if (!gVMLGPSReplayEnabled) { acc = 0.0; return; }
+        acc += 0.20;
+        if (acc + 0.001 < gVMLGPSReplayInterval) return;
+        acc = 0.0;
+        CLLocation *loc = VMLGPSBuildNextLocation();
+        if (loc) VMLGPSBroadcast(loc);
+    }];
+    VMLGPSLog(@"GPS REPLAY TIMER STARTED config=%@", VMLGPSReplayPath());
+}
+
+%hook CLLocationManager
+- (void)setDelegate:(id<CLLocationManagerDelegate>)delegate {
+    if (!delegate || [delegate isKindOfClass:VMLLocationDelegateProxy.class]) {
+        %orig(delegate);
+        return;
+    }
+    VMLLocationDelegateProxy *proxy = objc_getAssociatedObject(self, kVMLGPSProxyKey);
+    if (!proxy) {
+        proxy = [VMLLocationDelegateProxy new];
+        objc_setAssociatedObject(self, kVMLGPSProxyKey, proxy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    proxy.originalDelegate = delegate;
+    VMLGPSRegisterManager(self);
+    %orig((id<CLLocationManagerDelegate>)proxy);
+}
+- (void)startUpdatingLocation {
+    VMLGPSRegisterManager(self);
+    %orig;
+}
+- (CLLocation *)location {
+    if (gVMLGPSReplayEnabled && gVMLGPSFakeLocation) return gVMLGPSFakeLocation;
+    return %orig;
+}
+%end
+
+
 static void VMLStart(void) {
     NSString *bundleID =
         NSBundle.mainBundle.bundleIdentifier ?: @"";
@@ -1152,6 +1442,7 @@ static void VMLStart(void) {
     VMLStartCarPlayTemplateSceneWatcher();
     VMLScheduleClassDump();
     VMLScheduleFocusedMethodDump();
+    VMLGPSStartReplayTimer();
 
 
 

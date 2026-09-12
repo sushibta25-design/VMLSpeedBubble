@@ -26,3 +26,4 @@ This diagnostic build keeps the existing runtime sniffer and additionally writes
 - `Documents/VMLWarningTrace.txt`: Flutter calls whose method names or payload keys look related to warning/sign/traffic/route/parking/stop/speed-limit data.
 
 Open VietMap Live, wait ~8 seconds for the method dump, then reproduce a route that displays a no-parking/no-stopping sign and collect both files.
+\n\n## GPS Replay V3\n\nWhen VietMap Live starts, `Documents/VMLGPSReplay.txt` is created automatically.\nEdit it in Filza. Example:\n\n```\nenabled=1\nspeed_kmh=30\ninterval=1.0\nloop=1\n10.123456,106.123456\n10.124000,106.124500\n10.125000,106.125500\n```\n\nAt least two route coordinates are required. The file is reloaded while the app is running.\nReplay log: `Documents/VMLGPSReplayLog.txt`.\nSet `enabled=0` to immediately stop injecting fake locations.\n
