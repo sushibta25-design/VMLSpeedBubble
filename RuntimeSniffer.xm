@@ -530,9 +530,10 @@ static void VMLDumpPropertiesForClass(Class cls) {
     for (unsigned int i = 0; i < count; i++) {
         const char *name = property_getName(props[i]);
         const char *attrs = property_getAttributes(props[i]);
+        NSString *propertyName = name ? [NSString stringWithUTF8String:name] : @"?";
+        const char *propertyAttrs = attrs ? attrs : "?";
         VMLMethodDumpWrite([NSString stringWithFormat:@"  %@ | attrs=%s",
-                            name ? [NSString stringWithUTF8String:name] : @"?",
-                            attrs ?: "?"]]);
+                            propertyName, propertyAttrs]);
     }
     if (props) free(props);
 }
@@ -545,9 +546,10 @@ static void VMLDumpIvarsForClass(Class cls) {
         const char *name = ivar_getName(ivars[i]);
         const char *type = ivar_getTypeEncoding(ivars[i]);
         ptrdiff_t offset = ivar_getOffset(ivars[i]);
+        NSString *ivarName = name ? [NSString stringWithUTF8String:name] : @"?";
+        const char *ivarType = type ? type : "?";
         VMLMethodDumpWrite([NSString stringWithFormat:@"  %@ | type=%s offset=%td",
-                            name ? [NSString stringWithUTF8String:name] : @"?",
-                            type ?: "?", offset]);
+                            ivarName, ivarType, offset]);
     }
     if (ivars) free(ivars);
 }
@@ -558,8 +560,8 @@ static void VMLDumpProtocolsForClass(Class cls) {
     VMLMethodDumpWrite([NSString stringWithFormat:@"PROTOCOLS count=%u", count]);
     for (unsigned int i = 0; i < count; i++) {
         const char *name = protocol_getName(protocols[i]);
-        VMLMethodDumpWrite([NSString stringWithFormat:@"  %@",
-                            name ? [NSString stringWithUTF8String:name] : @"?"]]);
+        NSString *protocolName = name ? [NSString stringWithUTF8String:name] : @"?";
+        VMLMethodDumpWrite([NSString stringWithFormat:@"  %@", protocolName]);
     }
     if (protocols) free(protocols);
 }
@@ -576,12 +578,13 @@ static void VMLDumpOneTargetClass(NSString *target) {
 
     const char *imageRaw = class_getImageName(cls);
     Class superCls = class_getSuperclass(cls);
-    VMLMethodDumpWrite([NSString stringWithFormat:@"STATUS FOUND runtime=%@",
-                        NSStringFromClass(cls)]);
-    VMLMethodDumpWrite([NSString stringWithFormat:@"IMAGE %@",
-                        imageRaw ? [NSString stringWithUTF8String:imageRaw] : @"?"]]);
-    VMLMethodDumpWrite([NSString stringWithFormat:@"SUPER %@",
-                        superCls ? NSStringFromClass(superCls) : @"nil"]);
+    NSString *runtimeName = NSStringFromClass(cls);
+    NSString *imageName = imageRaw ? [NSString stringWithUTF8String:imageRaw] : @"?";
+    NSString *superName = superCls ? NSStringFromClass(superCls) : @"nil";
+
+    VMLMethodDumpWrite([NSString stringWithFormat:@"STATUS FOUND runtime=%@", runtimeName]);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"IMAGE %@", imageName]);
+    VMLMethodDumpWrite([NSString stringWithFormat:@"SUPER %@", superName]);
 
     VMLDumpMethodsForClassObject(cls, NO);
     VMLDumpMethodsForClassObject(cls, YES);
