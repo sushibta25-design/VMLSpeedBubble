@@ -1,6 +1,6 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.1-phone-diag1
+Version: 16.2-phone-fix
 Architecture: iphoneos-arm64e
 Description: VML Speed Bubble plus phone-only Google Maps destination diagnostics for the weather-at-destination feature.
 Maintainer: sushibta25-design
