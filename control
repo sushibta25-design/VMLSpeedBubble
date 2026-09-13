@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.15-carplay-weather-voicefix1
+Version: 16.16-carplay-weather-voice2
 Architecture: iphoneos-arm64e
-Description: CarPlay destination weather with compact SF Pro banner and Vietnamese speech using an explicit SpokenAudio playback session with ducking for reliable CarPlay audio.
+Description: Google Maps CarPlay destination weather with dynamic SF Symbol weather icons, destination name in the banner, and Vietnamese advisory speech routed through a SpringBoard spoken-audio bridge.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
