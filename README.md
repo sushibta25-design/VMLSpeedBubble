@@ -9,7 +9,7 @@ Version `16.9-carplay-weather-phoneforeground1` separates the Google Maps phone 
 Expected probe flow:
 
 1. Connect CarPlay: `WEATHER IPC READY` appears on CarPlay.
-2. Unlocking the iPhone alone should no longer produce the Google Maps sender test.
+2. Unlocking the iPhone alone should no longer produce `GOOGLE MAPS IPC OK`.
 3. Open Google Maps on the iPhone: `GMW PHONE SCENE OK` appears on the iPhone and `GOOGLE MAPS IPC OK` appears on CarPlay.
 4. Select a destination and start navigation; the sender then attempts destination capture, CLGeocoder, Open-Meteo, and the weather IPC event.
 
