@@ -6,12 +6,13 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-static NSString *const kGMPhoneLogPath =
-    @"/var/mobile/GoogleMapsPhoneTrace.txt";
+#define kGMPhoneLogPath \
+    ([NSHomeDirectory() stringByAppendingPathComponent: \
+        @"Documents/GoogleMapsPhoneTrace.txt"])
 
-static NSString *const kGMPhoneSnapshotPath =
-    @"/var/mobile/GoogleMapsPhoneSnapshot.json";
-
+#define kGMPhoneSnapshotPath \
+    ([NSHomeDirectory() stringByAppendingPathComponent: \
+        @"Documents/GoogleMapsPhoneSnapshot.json"])
 static NSMutableSet<NSString *> *gGMLoggedTextEvents = nil;
 static NSUInteger gGMSnapshotGeneration = 0;
 static BOOL gGMRuntimeDumpStarted = NO;
