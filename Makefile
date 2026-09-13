@@ -37,7 +37,7 @@ CarPlayGoogleHostProbe_LIBRARIES = substrate
 
 CarPlayTemplateHostProbe_FILES = CarPlayTemplateHostProbe.xm
 CarPlayTemplateHostProbe_CFLAGS = -fobjc-arc -Werror
-CarPlayTemplateHostProbe_FRAMEWORKS = UIKit Foundation QuartzCore
+CarPlayTemplateHostProbe_FRAMEWORKS = UIKit Foundation QuartzCore CoreLocation
 CarPlayTemplateHostProbe_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
