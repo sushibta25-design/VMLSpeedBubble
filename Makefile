@@ -27,7 +27,7 @@ GoogleMapsWeatherIPC_LIBRARIES = substrate
 
 CarPlayWeatherIPC_FILES = CarPlayWeatherIPC.xm
 CarPlayWeatherIPC_CFLAGS = -fobjc-arc -Werror
-CarPlayWeatherIPC_FRAMEWORKS = UIKit Foundation QuartzCore
+CarPlayWeatherIPC_FRAMEWORKS = UIKit Foundation QuartzCore AVFoundation
 CarPlayWeatherIPC_LIBRARIES = substrate
 
 CarPlayGoogleHostProbe_FILES = CarPlayGoogleHostProbe.xm
