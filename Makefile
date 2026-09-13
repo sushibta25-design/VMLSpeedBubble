@@ -4,7 +4,7 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = VMLSpeedBubble VMLRuntimeSniffer GoogleMapsPhoneSniffer
+TWEAK_NAME = VMLSpeedBubble VMLRuntimeSniffer GoogleMapsPhoneSniffer GoogleMapsWeatherIPC CarPlayWeatherIPC
 
 VMLSpeedBubble_FILES = Tweak.xm
 VMLSpeedBubble_CFLAGS = -fobjc-arc -Werror
@@ -19,5 +19,15 @@ GoogleMapsPhoneSniffer_FILES = GoogleMapsPhoneSniffer.xm
 GoogleMapsPhoneSniffer_CFLAGS = -fobjc-arc -Werror
 GoogleMapsPhoneSniffer_FRAMEWORKS = UIKit Foundation CoreLocation AVFoundation
 GoogleMapsPhoneSniffer_LIBRARIES = substrate
+
+GoogleMapsWeatherIPC_FILES = GoogleMapsWeatherIPC.xm
+GoogleMapsWeatherIPC_CFLAGS = -fobjc-arc -Werror
+GoogleMapsWeatherIPC_FRAMEWORKS = UIKit Foundation CoreLocation
+GoogleMapsWeatherIPC_LIBRARIES = substrate
+
+CarPlayWeatherIPC_FILES = CarPlayWeatherIPC.xm
+CarPlayWeatherIPC_CFLAGS = -fobjc-arc -Werror
+CarPlayWeatherIPC_FRAMEWORKS = UIKit Foundation QuartzCore
+CarPlayWeatherIPC_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
