@@ -4,7 +4,7 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = VMLSpeedBubble VMLRuntimeSniffer GoogleMapsPhoneSniffer GoogleMapsWeatherIPC CarPlayWeatherIPC CarPlayGoogleHostProbe CarPlayTemplateHostProbe
+TWEAK_NAME = VMLSpeedBubble VMLRuntimeSniffer GoogleMapsPhoneSniffer GoogleMapsWeatherIPC CarPlayWeatherIPC CarPlayGoogleHostProbe CarPlayTemplateHostProbe WeatherSpeechBridge
 
 VMLSpeedBubble_FILES = Tweak.xm
 VMLSpeedBubble_CFLAGS = -fobjc-arc -Werror
@@ -27,7 +27,7 @@ GoogleMapsWeatherIPC_LIBRARIES = substrate
 
 CarPlayWeatherIPC_FILES = CarPlayWeatherIPC.xm
 CarPlayWeatherIPC_CFLAGS = -fobjc-arc -Werror
-CarPlayWeatherIPC_FRAMEWORKS = UIKit Foundation QuartzCore AVFoundation
+CarPlayWeatherIPC_FRAMEWORKS = UIKit Foundation QuartzCore
 CarPlayWeatherIPC_LIBRARIES = substrate
 
 CarPlayGoogleHostProbe_FILES = CarPlayGoogleHostProbe.xm
@@ -39,5 +39,10 @@ CarPlayTemplateHostProbe_FILES = CarPlayTemplateHostProbe.xm
 CarPlayTemplateHostProbe_CFLAGS = -fobjc-arc -Werror
 CarPlayTemplateHostProbe_FRAMEWORKS = UIKit Foundation QuartzCore CoreLocation
 CarPlayTemplateHostProbe_LIBRARIES = substrate
+
+WeatherSpeechBridge_FILES = WeatherSpeechBridge.xm
+WeatherSpeechBridge_CFLAGS = -fobjc-arc -Werror
+WeatherSpeechBridge_FRAMEWORKS = Foundation AVFoundation
+WeatherSpeechBridge_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
