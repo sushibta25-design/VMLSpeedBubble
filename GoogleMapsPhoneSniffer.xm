@@ -16,6 +16,7 @@ static NSString *gGMLastWeatherDestination = nil;
 static NSDate *gGMLastWeatherAt = nil;
 static AVSpeechSynthesizer *gGMSpeech = nil;
 static NSString *gGMLastState = nil;
+static BOOL gGMCarPlayReadyShown = NO;
 
 static BOOL GMIsGoogleMaps(void) {
     return [NSBundle.mainBundle.bundleIdentifier isEqualToString:kGMBundle];
@@ -118,36 +119,115 @@ static void GMScanAndCacheDestination(NSString *reason) {
     if (preview) GMCaptureDestinationFromPreview(preview, reason);
 }
 
-static UIWindow *GMTopWindow(void) {
+static BOOL GMSceneLooksLikeCarPlay(UIWindowScene *scene) {
+    if (!scene) return NO;
+    NSString *role = scene.session.role ?: @"";
+    NSString *roleLower = role.lowercaseString;
+    if ([roleLower containsString:@"carplay"] || [roleLower containsString:@"car"] || [roleLower containsString:@"automotive"]) return YES;
+    UIScreen *mainScreen = UIScreen.mainScreen;
+    if (scene.screen && scene.screen != mainScreen) return YES;
+    return NO;
+}
+
+static void GMLogSceneState(NSString *reason) {
+    if (!GMIsGoogleMaps()) return;
+    UIApplication *app = UIApplication.sharedApplication;
+    GMLog(@"CARPLAY_SCAN reason=%@ scenes=%lu screens=%lu", reason ?: @"unknown", (unsigned long)app.connectedScenes.count, (unsigned long)UIScreen.screens.count);
+    NSInteger sceneIndex = 0;
+    for (UIScene *rawScene in app.connectedScenes) {
+        if (![rawScene isKindOfClass:UIWindowScene.class]) {
+            GMLog(@"SCENE[%ld] class=%@ role=%@", (long)sceneIndex, NSStringFromClass(rawScene.class), rawScene.session.role ?: @"");
+            sceneIndex++;
+            continue;
+        }
+        UIWindowScene *scene = (UIWindowScene *)rawScene;
+        GMLog(@"SCENE[%ld] class=%@ role=%@ state=%ld carplay=%d screen=%@ bounds=%@ windows=%lu", (long)sceneIndex, NSStringFromClass(scene.class), scene.session.role ?: @"", (long)scene.activationState, GMSceneLooksLikeCarPlay(scene), scene.screen, NSStringFromCGRect(scene.screen.bounds), (unsigned long)scene.windows.count);
+        NSInteger windowIndex = 0;
+        for (UIWindow *window in scene.windows) {
+            GMLog(@"  WINDOW[%ld] class=%@ frame=%@ level=%.1f hidden=%d alpha=%.2f key=%d root=%@", (long)windowIndex, NSStringFromClass(window.class), NSStringFromCGRect(window.frame), window.windowLevel, window.hidden, window.alpha, window.isKeyWindow, window.rootViewController ? NSStringFromClass(window.rootViewController.class) : @"nil");
+            windowIndex++;
+        }
+        sceneIndex++;
+    }
+}
+
+static UIWindow *GMCarPlayWindow(void) {
+    UIApplication *app = UIApplication.sharedApplication;
     UIWindow *best = nil;
-    for (UIWindow *window in GMAllWindows()) {
-        if (window.hidden || window.alpha <= 0.01) continue;
-        if (!best || window.windowLevel >= best.windowLevel) best = window;
+    for (UIScene *rawScene in app.connectedScenes) {
+        if (![rawScene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *scene = (UIWindowScene *)rawScene;
+        if (!GMSceneLooksLikeCarPlay(scene)) continue;
+        for (UIWindow *window in scene.windows) {
+            if (window.hidden || window.alpha <= 0.01 || !window.rootViewController) continue;
+            if (!best || window.isKeyWindow || window.windowLevel >= best.windowLevel) best = window;
+            if (window.isKeyWindow) return window;
+        }
     }
     return best;
 }
 
-static void GMShowBannerForDuration(NSString *text, NSTimeInterval duration) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = GMTopWindow();
-        if (!window || !text.length) { GMLog(@"BANNER_FAILED window=%@ textLength=%lu", window, (unsigned long)text.length); return; }
+static BOOL GMShowCarPlayBanner(NSString *text, NSTimeInterval duration) {
+    if (!text.length) return NO;
+    __block BOOL found = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        UIWindow *window = GMCarPlayWindow();
+        if (!window) {
+            GMLog(@"CARPLAY_BANNER_FAILED noCarPlayWindow text=\"%@\"", text);
+            return;
+        }
+        found = YES;
         UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
         label.numberOfLines = 0;
         label.textAlignment = NSTextAlignmentCenter;
         label.textColor = UIColor.whiteColor;
-        label.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.94];
-        label.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-        label.layer.cornerRadius = 14;
+        label.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.95];
+        label.font = [UIFont systemFontOfSize:24.0 weight:UIFontWeightBold];
+        label.layer.cornerRadius = 16.0;
         label.layer.masksToBounds = YES;
         label.text = text;
-        CGFloat width = MIN(window.bounds.size.width - 32.0, 420.0);
-        CGSize fit = [label sizeThatFits:CGSizeMake(width - 28.0, CGFLOAT_MAX)];
-        CGFloat height = MAX(58.0, fit.height + 28.0);
-        label.frame = CGRectMake((window.bounds.size.width - width) / 2.0, window.safeAreaInsets.top + 12.0, width, height);
+        CGFloat width = MIN(window.bounds.size.width - 48.0, 620.0);
+        CGSize fit = [label sizeThatFits:CGSizeMake(width - 36.0, CGFLOAT_MAX)];
+        CGFloat height = MAX(76.0, fit.height + 30.0);
+        CGFloat top = MAX(window.safeAreaInsets.top + 16.0, 22.0);
+        label.frame = CGRectMake((window.bounds.size.width - width) / 2.0, top, width, height);
         label.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
+        label.tag = 916503;
+        UIView *old = [window viewWithTag:916503];
+        if (old) [old removeFromSuperview];
         [window addSubview:label];
-        GMLog(@"BANNER_SHOW text=\"%@\" duration=%.0f", text, duration);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [label removeFromSuperview]; });
+        [window bringSubviewToFront:label];
+        GMLog(@"CARPLAY_BANNER_SHOW window=%@ frame=%@ text=\"%@\" duration=%.0f", NSStringFromClass(window.class), NSStringFromCGRect(window.frame), text, duration);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (label.superview) [label removeFromSuperview];
+        });
+    });
+    return found;
+}
+
+static void GMMaybeShowCarPlayReady(NSString *reason) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gGMCarPlayReadyShown) return;
+        GMLogSceneState(reason);
+        UIWindow *window = GMCarPlayWindow();
+        if (!window) return;
+        gGMCarPlayReadyShown = YES;
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+        label.numberOfLines = 1;
+        label.textAlignment = NSTextAlignmentCenter;
+        label.textColor = UIColor.whiteColor;
+        label.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.95];
+        label.font = [UIFont systemFontOfSize:22.0 weight:UIFontWeightBold];
+        label.layer.cornerRadius = 15.0;
+        label.layer.masksToBounds = YES;
+        label.text = @"CarPlay weather ready";
+        CGFloat width = MIN(window.bounds.size.width - 48.0, 520.0);
+        label.frame = CGRectMake((window.bounds.size.width - width) / 2.0, MAX(window.safeAreaInsets.top + 16.0, 22.0), width, 66.0);
+        label.tag = 916504;
+        [window addSubview:label];
+        [window bringSubviewToFront:label];
+        GMLog(@"CARPLAY_READY_SHOW reason=%@ window=%@", reason ?: @"unknown", NSStringFromClass(window.class));
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [label removeFromSuperview]; });
     });
 }
 
@@ -206,7 +286,8 @@ static void GMFetchWeatherForDestination(NSString *destination) {
             NSString *condition = GMWeatherDescription(code.integerValue);
             NSString *banner = wind ? [NSString stringWithFormat:@"%@\n%.0f°C, %@, gió %.0f km/h", destination, temp.doubleValue, condition, wind.doubleValue] : [NSString stringWithFormat:@"%@\n%.0f°C, %@", destination, temp.doubleValue, condition];
             NSString *speech = [NSString stringWithFormat:@"Điểm đến %@, %.0f độ, %@.", destination, temp.doubleValue, condition];
-            GMShowBannerForDuration(banner, 12.0);
+            BOOL shown = GMShowCarPlayBanner(banner, 12.0);
+            GMLog(@"WEATHER_CARPLAY_RESULT shown=%d", shown);
             GMSpeakVietnamese(speech);
         }] resume];
     }];
@@ -219,11 +300,13 @@ static void GMCheckState(NSString *reason) {
     UIView *preview = GMFindVisibleClass(kGMDestinationClass);
     BOOL navActive = (header != nil || footer != nil);
     if (preview) GMCaptureDestinationFromPreview(preview, reason);
-    NSString *state = [NSString stringWithFormat:@"header=%d footer=%d preview=%d nav=%d cached=%@", header != nil, footer != nil, preview != nil, navActive, gGMCachedDestination ?: @"<nil>"];
+    UIWindow *cpWindow = GMCarPlayWindow();
+    NSString *state = [NSString stringWithFormat:@"header=%d footer=%d preview=%d nav=%d carplayWindow=%d cached=%@", header != nil, footer != nil, preview != nil, navActive, cpWindow != nil, gGMCachedDestination ?: @"<nil>"];
     if (![state isEqualToString:gGMLastState]) {
         gGMLastState = [state copy];
         GMLog(@"STATE reason=%@ %@", reason ?: @"unknown", state);
     }
+    if (cpWindow) GMMaybeShowCarPlayReady(@"state-check");
     if (navActive && gGMCachedDestination.length) GMFetchWeatherForDestination(gGMCachedDestination);
 }
 
@@ -267,12 +350,21 @@ static void GMScheduleCheck(NSString *reason, NSTimeInterval delay) {
     @autoreleasepool {
         if (!GMIsGoogleMaps()) return;
         GMLog(@"========================================");
-        GMLog(@"16.4-phone-weather-debug1 LOADED bundle=%@ process=%@", NSBundle.mainBundle.bundleIdentifier ?: @"", NSProcessInfo.processInfo.processName ?: @"");
+        GMLog(@"16.5-carplay-weather-debug1 LOADED bundle=%@ process=%@", NSBundle.mainBundle.bundleIdentifier ?: @"", NSProcessInfo.processInfo.processName ?: @"");
         GMLog(@"logPath=%@", kGMDebugLogPath);
         GMLog(@"========================================");
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIScreenDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
+            GMLog(@"UIScreenDidConnectNotification");
+            GMScheduleCheck(@"screen-connect", 1.0);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ GMMaybeShowCarPlayReady(@"screen-connect+2s"); });
+        }];
+        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneDidActivateNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
+            GMScheduleCheck(@"scene-activate", 0.8);
+            GMMaybeShowCarPlayReady(@"scene-activate");
+        }];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            GMShowBannerForDuration(@"Weather debug loaded", 4.0);
             GMScanAndCacheDestination(@"startup");
+            GMLogSceneState(@"startup");
             GMCheckState(@"startup");
         });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
