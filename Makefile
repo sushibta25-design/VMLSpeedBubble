@@ -4,7 +4,7 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = VMLSpeedBubble VMLRuntimeSniffer GoogleMapsPhoneSniffer GoogleMapsWeatherIPC CarPlayWeatherIPC CarPlayGoogleHostProbe
+TWEAK_NAME = VMLSpeedBubble VMLRuntimeSniffer GoogleMapsPhoneSniffer GoogleMapsWeatherIPC CarPlayWeatherIPC CarPlayGoogleHostProbe CarPlayTemplateHostProbe
 
 VMLSpeedBubble_FILES = Tweak.xm
 VMLSpeedBubble_CFLAGS = -fobjc-arc -Werror
@@ -34,5 +34,10 @@ CarPlayGoogleHostProbe_FILES = CarPlayGoogleHostProbe.xm
 CarPlayGoogleHostProbe_CFLAGS = -fobjc-arc -Werror
 CarPlayGoogleHostProbe_FRAMEWORKS = UIKit Foundation QuartzCore
 CarPlayGoogleHostProbe_LIBRARIES = substrate
+
+CarPlayTemplateHostProbe_FILES = CarPlayTemplateHostProbe.xm
+CarPlayTemplateHostProbe_CFLAGS = -fobjc-arc -Werror
+CarPlayTemplateHostProbe_FRAMEWORKS = UIKit Foundation QuartzCore
+CarPlayTemplateHostProbe_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
