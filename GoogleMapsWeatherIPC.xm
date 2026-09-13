@@ -14,69 +14,48 @@ static NSString *gGMWDestination = nil;
 static NSString *gGMWLastSentDestination = nil;
 static NSDate *gGMWLastSentAt = nil;
 static int gGMWNotifyToken = 0;
+static BOOL gGMWSenderTestPostedForPhoneScene = NO;
 
 static BOOL GMWIsGoogleMaps(void) {
     return [NSBundle.mainBundle.bundleIdentifier isEqualToString:kGMWBundle];
 }
 
-static NSArray<UIWindow *> *GMWWindows(void) {
+static NSArray<UIWindow *> *GMWPhoneWindows(void) {
     NSMutableArray<UIWindow *> *out = [NSMutableArray array];
     UIApplication *app = UIApplication.sharedApplication;
+    UIScreen *phoneScreen = UIScreen.mainScreen;
     if (@available(iOS 13.0, *)) {
         for (UIScene *scene in app.connectedScenes) {
             if (![scene isKindOfClass:UIWindowScene.class]) continue;
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            if (ws.screen != phoneScreen) continue;
+            for (UIWindow *w in ws.windows) {
                 if (w && ![out containsObject:w]) [out addObject:w];
             }
         }
     }
-    @try {
-        NSArray *legacy = [app valueForKey:@"windows"];
-        for (UIWindow *w in legacy) if (w && ![out containsObject:w]) [out addObject:w];
-    } @catch (__unused NSException *e) {}
     return out;
 }
 
-static UIWindow *GMWTopWindow(void) {
-    UIWindow *best = nil;
-    for (UIWindow *w in GMWWindows()) {
-        if (w.hidden || w.alpha <= 0.01) continue;
-        if (!best || w.isKeyWindow || w.windowLevel >= best.windowLevel) best = w;
-        if (w.isKeyWindow) break;
+static BOOL GMWPhoneSceneForegroundActive(void) {
+    UIScreen *phoneScreen = UIScreen.mainScreen;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *ws = (UIWindowScene *)scene;
+        if (ws.screen != phoneScreen) continue;
+        if (ws.activationState != UISceneActivationStateForegroundActive) continue;
+        for (UIWindow *w in ws.windows) {
+            if (w && !w.hidden && w.alpha > 0.01 && w.isKeyWindow && w.rootViewController) return YES;
+        }
     }
-    return best;
+    return NO;
 }
 
-static void GMWShowInjectProbe(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *window = GMWTopWindow();
-        if (!window) {
-            NSLog(@"[GMWIPC] local probe failed: no window");
-            return;
-        }
-        UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
-        label.tag = 916708;
-        label.text = @"GMW INJECT OK";
-        label.textAlignment = NSTextAlignmentCenter;
-        label.textColor = UIColor.whiteColor;
-        label.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.94];
-        label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
-        label.layer.cornerRadius = 12.0;
-        label.layer.masksToBounds = YES;
-        CGFloat width = MIN(window.bounds.size.width - 32.0, 320.0);
-        label.frame = CGRectMake((window.bounds.size.width - width) / 2.0,
-                                 window.safeAreaInsets.top + 10.0,
-                                 width,
-                                 52.0);
-        UIView *old = [window viewWithTag:916708];
-        [old removeFromSuperview];
-        [window addSubview:label];
-        [window bringSubviewToFront:label];
-        NSLog(@"[GMWIPC] LOCAL INJECT PROBE SHOWN");
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [label removeFromSuperview];
-        });
-    });
+static UIWindow *GMWPhoneKeyWindow(void) {
+    for (UIWindow *w in GMWPhoneWindows()) {
+        if (!w.hidden && w.alpha > 0.01 && w.isKeyWindow && w.rootViewController) return w;
+    }
+    return nil;
 }
 
 static UIView *GMWFind(UIView *root, NSString *className) {
@@ -90,7 +69,7 @@ static UIView *GMWFind(UIView *root, NSString *className) {
 }
 
 static UIView *GMWVisibleClass(NSString *className) {
-    for (UIWindow *w in GMWWindows()) {
+    for (UIWindow *w in GMWPhoneWindows()) {
         if (w.hidden || w.alpha <= 0.01) continue;
         UIView *found = GMWFind(w, className);
         if (found) return found;
@@ -122,9 +101,7 @@ static void GMWCollectText(UIView *view, NSMutableArray<NSString *> *texts) {
 static NSString *GMWChooseDestination(NSArray<NSString *> *texts) {
     for (NSString *candidate in texts) {
         NSString *lower = candidate.lowercaseString;
-        if ([lower containsString:@"km"] || [lower containsString:@"min"] ||
-            [lower containsString:@"phút"] || [lower containsString:@"giờ"] ||
-            [lower containsString:@"bắt đầu"] || [lower containsString:@"start"]) continue;
+        if ([lower containsString:@"km"] || [lower containsString:@"min"] || [lower containsString:@"phút"] || [lower containsString:@"giờ"] || [lower containsString:@"bắt đầu"] || [lower containsString:@"start"]) continue;
         return candidate;
     }
     return nil;
@@ -142,9 +119,37 @@ static void GMWCaptureDestination(void) {
     }
 }
 
-static void GMWPostSenderTest(void) {
-    uint32_t status = notify_post(kGMWTestNotify);
-    NSLog(@"[GMWIPC] sender test posted status=%u", status);
+static void GMWShowPhoneProbe(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *window = GMWPhoneKeyWindow();
+        if (!window) return;
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+        label.numberOfLines = 1;
+        label.textAlignment = NSTextAlignmentCenter;
+        label.textColor = UIColor.whiteColor;
+        label.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
+        label.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+        label.layer.cornerRadius = 12.0;
+        label.layer.masksToBounds = YES;
+        label.text = @"GMW PHONE SCENE OK";
+        CGFloat width = MIN(window.bounds.size.width - 32.0, 340.0);
+        label.frame = CGRectMake((window.bounds.size.width - width) / 2.0, window.safeAreaInsets.top + 10.0, width, 52.0);
+        label.tag = 916509;
+        [[window viewWithTag:916509] removeFromSuperview];
+        [window addSubview:label];
+        [window bringSubviewToFront:label];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [label removeFromSuperview];
+        });
+    });
+}
+
+static void GMWPostSenderTestIfPhoneForeground(void) {
+    if (gGMWSenderTestPostedForPhoneScene || !GMWPhoneSceneForegroundActive()) return;
+    gGMWSenderTestPostedForPhoneScene = YES;
+    GMWShowPhoneProbe();
+    notify_post(kGMWTestNotify);
+    NSLog(@"[GMWIPC] PHONE foreground sender test posted");
 }
 
 static void GMWPostWeather(double tempC, NSInteger code, double windKmh) {
@@ -165,17 +170,16 @@ static void GMWPostWeather(double tempC, NSInteger code, double windKmh) {
     uint64_t state = tempPacked | (codePacked << 16) | (windPacked << 24);
     uint32_t setStatus = notify_set_state(gGMWNotifyToken, state);
     uint32_t postStatus = notify_post(kGMWWeatherNotify);
-    NSLog(@"[GMWIPC] weather posted state=%llu temp=%.1f code=%ld wind=%.1f set=%u post=%u",
-          state, tempC, (long)code, windKmh, setStatus, postStatus);
+    NSLog(@"[GMWIPC] weather posted state=%llu temp=%.1f code=%ld wind=%.1f set=%u post=%u", state, tempC, (long)code, windKmh, setStatus, postStatus);
 }
 
 static void GMWFetchWeatherIfReady(void) {
+    if (!GMWPhoneSceneForegroundActive()) return;
     GMWCaptureDestination();
     BOOL nav = GMWNavigationActive();
-    NSLog(@"[GMWIPC] tick nav=%d destination=%@", nav, gGMWDestination ?: @"<nil>");
+    NSLog(@"[GMWIPC] tick phoneForeground=1 nav=%d destination=%@", nav, gGMWDestination ?: @"<nil>");
     if (!nav || !gGMWDestination.length) return;
-    if ([gGMWDestination isEqualToString:gGMWLastSentDestination] &&
-        gGMWLastSentAt && [[NSDate date] timeIntervalSinceDate:gGMWLastSentAt] < 300.0) return;
+    if ([gGMWDestination isEqualToString:gGMWLastSentDestination] && gGMWLastSentAt && [[NSDate date] timeIntervalSinceDate:gGMWLastSentAt] < 300.0) return;
 
     gGMWLastSentDestination = [gGMWDestination copy];
     gGMWLastSentAt = [NSDate date];
@@ -185,20 +189,17 @@ static void GMWFetchWeatherIfReady(void) {
     CLGeocoder *geocoder = [CLGeocoder new];
     [geocoder geocodeAddressString:query completionHandler:^(NSArray<CLPlacemark *> *placemarks, NSError *error) {
         CLLocation *location = placemarks.firstObject.location;
-        NSLog(@"[GMWIPC] geocode count=%lu error=%@ location=%@",
-              (unsigned long)placemarks.count, error.localizedDescription ?: @"none", location);
+        NSLog(@"[GMWIPC] geocode count=%lu error=%@ location=%@", (unsigned long)placemarks.count, error.localizedDescription ?: @"none", location);
         if (error || !location) return;
 
-        NSString *urlString = [NSString stringWithFormat:
-            @"https://api.open-meteo.com/v1/forecast?latitude=%.6f&longitude=%.6f&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto",
-            location.coordinate.latitude, location.coordinate.longitude];
+        NSString *urlString = [NSString stringWithFormat:@"https://api.open-meteo.com/v1/forecast?latitude=%.6f&longitude=%.6f&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto", location.coordinate.latitude, location.coordinate.longitude];
         NSURL *url = [NSURL URLWithString:urlString];
         if (!url) return;
+        NSLog(@"[GMWIPC] open-meteo request=%@", urlString);
 
         [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *netError) {
             NSInteger statusCode = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
-            NSLog(@"[GMWIPC] open-meteo status=%ld bytes=%lu error=%@",
-                  (long)statusCode, (unsigned long)data.length, netError.localizedDescription ?: @"none");
+            NSLog(@"[GMWIPC] open-meteo status=%ld bytes=%lu error=%@", (long)statusCode, (unsigned long)data.length, netError.localizedDescription ?: @"none");
             if (netError || !data) return;
 
             NSError *jsonError = nil;
@@ -216,6 +217,7 @@ static void GMWFetchWeatherIfReady(void) {
 
 static void GMWSchedule(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        GMWPostSenderTestIfPhoneForeground();
         GMWFetchWeatherIfReady();
     });
 }
@@ -223,29 +225,24 @@ static void GMWSchedule(void) {
 %hook UIView
 - (void)didMoveToWindow {
     %orig;
-    if (!GMWIsGoogleMaps() || !self.window) return;
+    if (!GMWIsGoogleMaps() || !self.window || self.window.screen != UIScreen.mainScreen) return;
     NSString *name = NSStringFromClass(self.class);
     if ([name isEqualToString:kGMWDestinationClass]) {
-        NSLog(@"[GMWIPC] class seen=%@", name);
+        NSLog(@"[GMWIPC] phone class seen=%@", name);
         GMWCaptureDestination();
     }
-    if ([name isEqualToString:kGMWDestinationClass] ||
-        [name isEqualToString:kGMWNavHeaderClass] ||
-        [name isEqualToString:kGMWNavFooterClass]) {
-        NSLog(@"[GMWIPC] trigger class=%@", name);
-        GMWSchedule();
-    }
+    if ([name isEqualToString:kGMWDestinationClass] || [name isEqualToString:kGMWNavHeaderClass] || [name isEqualToString:kGMWNavFooterClass]) GMWSchedule();
 }
 %end
 
 %hook UILabel
 - (void)setText:(NSString *)text {
     %orig;
-    if (!GMWIsGoogleMaps() || !self.window) return;
+    if (!GMWIsGoogleMaps() || !self.window || self.window.screen != UIScreen.mainScreen) return;
     UIView *v = self;
     while (v) {
         if ([NSStringFromClass(v.class) isEqualToString:kGMWDestinationClass]) {
-            NSLog(@"[GMWIPC] preview label=%@", text ?: @"");
+            NSLog(@"[GMWIPC] phone preview label=%@", text ?: @"");
             GMWCaptureDestination();
             GMWSchedule();
             break;
@@ -258,20 +255,26 @@ static void GMWSchedule(void) {
 %ctor {
     @autoreleasepool {
         if (!GMWIsGoogleMaps()) return;
-        NSLog(@"[GMWIPC] 16.8 sender loaded bundle=%@", NSBundle.mainBundle.bundleIdentifier ?: @"");
+        NSLog(@"[GMWIPC] 16.9 sender loaded bundle=%@", NSBundle.mainBundle.bundleIdentifier ?: @"");
 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            GMWShowInjectProbe();
-        });
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                GMWPostSenderTestIfPhoneForeground();
+                GMWFetchWeatherIfReady();
+            });
+        }];
+
+        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneDidActivateNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                GMWPostSenderTestIfPhoneForeground();
+                GMWFetchWeatherIfReady();
+            });
+        }];
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            GMWPostSenderTest();
-        });
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            GMWCaptureDestination();
-            GMWFetchWeatherIfReady();
+            GMWPostSenderTestIfPhoneForeground();
             [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(__unused NSTimer *timer) {
+                GMWPostSenderTestIfPhoneForeground();
                 GMWFetchWeatherIfReady();
             }];
         });
