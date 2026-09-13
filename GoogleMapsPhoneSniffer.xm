@@ -217,13 +217,14 @@ static void GMCheckState(NSString *reason) {
     UIView *header = GMFindVisibleClass(kGMNavHeaderClass);
     UIView *footer = GMFindVisibleClass(kGMNavFooterClass);
     UIView *preview = GMFindVisibleClass(kGMDestinationClass);
+    BOOL navActive = (header != nil || footer != nil);
     if (preview) GMCaptureDestinationFromPreview(preview, reason);
-    NSString *state = [NSString stringWithFormat:@"header=%d footer=%d preview=%d nav=%d cached=%@", header != nil, footer != nil, preview != nil, (header || footer) != nil, gGMCachedDestination ?: @"<nil>"];
+    NSString *state = [NSString stringWithFormat:@"header=%d footer=%d preview=%d nav=%d cached=%@", header != nil, footer != nil, preview != nil, navActive, gGMCachedDestination ?: @"<nil>"];
     if (![state isEqualToString:gGMLastState]) {
         gGMLastState = [state copy];
         GMLog(@"STATE reason=%@ %@", reason ?: @"unknown", state);
     }
-    if ((header || footer) && gGMCachedDestination.length) GMFetchWeatherForDestination(gGMCachedDestination);
+    if (navActive && gGMCachedDestination.length) GMFetchWeatherForDestination(gGMCachedDestination);
 }
 
 static void GMScheduleCheck(NSString *reason, NSTimeInterval delay) {
