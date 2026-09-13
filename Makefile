@@ -17,7 +17,7 @@ VMLRuntimeSniffer_LIBRARIES = substrate
 
 GoogleMapsPhoneSniffer_FILES = GoogleMapsPhoneSniffer.xm
 GoogleMapsPhoneSniffer_CFLAGS = -fobjc-arc -Werror
-GoogleMapsPhoneSniffer_FRAMEWORKS = UIKit Foundation
+GoogleMapsPhoneSniffer_FRAMEWORKS = UIKit Foundation CoreLocation AVFoundation
 GoogleMapsPhoneSniffer_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
