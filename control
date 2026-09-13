@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.11-carplay-hostprobe1
+Version: 16.12-templatehost-probe1
 Architecture: iphoneos-arm64e
-Description: CarPlay host probe build that inspects hosted scene/container identifiers in com.apple.CarPlayApp to identify the real Google Maps CarPlay host/process path.
+Description: Probe build for com.apple.CarPlayTemplateUIHost to inspect Google Maps full-screen CarPlay template hierarchy, text and accessibility data.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
