@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.10-carplay-scene-sender1
+Version: 16.11-carplay-hostprobe1
 Architecture: iphoneos-arm64e
-Description: Google Maps weather IPC sender supports both foreground iPhone UI and foreground Google Maps CarPlay scenes, while CarPlayApp remains the dedicated overlay receiver.
+Description: CarPlay host probe build that inspects hosted scene/container identifiers in com.apple.CarPlayApp to identify the real Google Maps CarPlay host/process path.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
