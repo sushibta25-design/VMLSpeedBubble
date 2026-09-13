@@ -3,7 +3,9 @@
 #import <notify.h>
 
 static const char *kCPWWeatherNotify = "com.sushibta.vmlspeedbubble.weather";
+static const char *kCPWTestNotify = "com.sushibta.vmlspeedbubble.weather.test";
 static int gCPWToken = 0;
+static int gCPWTestToken = 0;
 static UIWindow *gCPWWindow = nil;
 static UILabel *gCPWLabel = nil;
 
@@ -32,7 +34,10 @@ static UIWindowScene *CPWFindScene(void) {
         }
         CGSize s = scene.screen.bounds.size;
         CGFloat score = s.width * s.height + highest;
-        if (!best || score > bestScore) { best = scene; bestScore = score; }
+        if (!best || score > bestScore) {
+            best = scene;
+            bestScore = score;
+        }
     }
     return best;
 }
@@ -41,19 +46,23 @@ static void CPWEnsureWindow(void) {
     if (!CPWIsCarPlayApp()) return;
     UIWindowScene *scene = CPWFindScene();
     if (!scene) return;
+
     if (gCPWWindow && gCPWWindow.windowScene != scene) {
         gCPWWindow.hidden = YES;
         gCPWWindow.rootViewController = nil;
         gCPWWindow = nil;
         gCPWLabel = nil;
     }
+
     CGRect bounds = scene.coordinateSpace.bounds;
     if (CGRectIsEmpty(bounds)) bounds = scene.screen.bounds;
+
     if (!gCPWWindow) {
         gCPWWindow = [[UIWindow alloc] initWithWindowScene:scene];
         gCPWWindow.backgroundColor = UIColor.clearColor;
         gCPWWindow.userInteractionEnabled = NO;
         gCPWWindow.windowLevel = UIWindowLevelAlert + 250.0;
+
         UIViewController *vc = [UIViewController new];
         vc.view.backgroundColor = UIColor.clearColor;
         vc.view.userInteractionEnabled = NO;
@@ -72,12 +81,19 @@ static void CPWEnsureWindow(void) {
         [vc.view addSubview:label];
         gCPWLabel = label;
     }
+
     gCPWWindow.frame = bounds;
     gCPWWindow.rootViewController.view.frame = CGRectMake(0, 0, bounds.size.width, bounds.size.height);
     CGFloat width = MIN(bounds.size.width - 48.0, 620.0);
-    gCPWLabel.frame = CGRectMake((bounds.size.width - width) / 2.0, MAX(18.0, bounds.size.height * 0.06), width, 84.0);
+    gCPWLabel.frame = CGRectMake((bounds.size.width - width) / 2.0,
+                                 MAX(18.0, bounds.size.height * 0.06),
+                                 width,
+                                 84.0);
+
     CGFloat highest = UIWindowLevelAlert;
-    for (UIWindow *w in scene.windows) if (w && w != gCPWWindow) highest = MAX(highest, w.windowLevel);
+    for (UIWindow *w in scene.windows) {
+        if (w && w != gCPWWindow) highest = MAX(highest, w.windowLevel);
+    }
     gCPWWindow.windowLevel = MAX(UIWindowLevelAlert + 250.0, highest + 120.0);
     gCPWWindow.hidden = NO;
     gCPWWindow.alpha = 1.0;
@@ -97,7 +113,7 @@ static void CPWShowText(NSString *text, NSTimeInterval duration) {
     dispatch_async(dispatch_get_main_queue(), ^{
         CPWEnsureWindow();
         if (!gCPWWindow || !gCPWLabel) {
-            NSLog(@"[CPWIPC] no CarPlay window");
+            NSLog(@"[CPWIPC] no CarPlay window for text=%@", text);
             return;
         }
         gCPWLabel.text = text;
@@ -107,50 +123,79 @@ static void CPWShowText(NSString *text, NSTimeInterval duration) {
         [gCPWLabel.superview bringSubviewToFront:gCPWLabel];
         NSLog(@"[CPWIPC] show %@", text);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            gCPWLabel.hidden = YES;
+            if ([gCPWLabel.text isEqualToString:text]) gCPWLabel.hidden = YES;
         });
     });
 }
 
 static void CPWReadWeather(int token) {
     uint64_t state = 0;
-    if (notify_get_state(token, &state) != NOTIFY_STATUS_OK) return;
+    uint32_t status = notify_get_state(token, &state);
+    NSLog(@"[CPWIPC] weather event token=%d getState=%u state=%llu", token, status, state);
+    if (status != NOTIFY_STATUS_OK) return;
+
     NSInteger tempPacked = (NSInteger)(state & 0xFFFFULL);
     NSInteger code = (NSInteger)((state >> 16) & 0xFFULL);
     NSInteger windPacked = (NSInteger)((state >> 24) & 0xFFFFULL);
     double tempC = ((double)tempPacked - 1000.0) / 10.0;
     double wind = ((double)windPacked) / 10.0;
     NSString *condition = CPWDescription(code);
-    NSString *text = [NSString stringWithFormat:@"THỜI TIẾT ĐIỂM ĐẾN\n%.0f°C • %@ • gió %.0f km/h", tempC, condition, wind];
+    NSString *text = [NSString stringWithFormat:@"THỜI TIẾT ĐIỂM ĐẾN\n%.0f°C • %@ • gió %.0f km/h",
+                      tempC, condition, wind];
     CPWShowText(text, 12.0);
 }
 
-static void CPWStartReceiver(void) {
-    if (!CPWIsCarPlayApp() || gCPWToken) return;
-    int token = 0;
-    uint32_t status = notify_register_dispatch(kCPWWeatherNotify, &token, dispatch_get_main_queue(), ^(int incomingToken) {
-        gCPWToken = incomingToken;
-        CPWReadWeather(incomingToken);
-    });
-    if (status == NOTIFY_STATUS_OK) {
-        gCPWToken = token;
-        NSLog(@"[CPWIPC] receiver ready token=%d", token);
-    } else {
-        NSLog(@"[CPWIPC] receiver failed status=%u", status);
+static void CPWStartReceivers(void) {
+    if (!CPWIsCarPlayApp()) return;
+
+    if (!gCPWToken) {
+        int token = 0;
+        uint32_t status = notify_register_dispatch(kCPWWeatherNotify, &token, dispatch_get_main_queue(), ^(int incomingToken) {
+            gCPWToken = incomingToken;
+            CPWReadWeather(incomingToken);
+        });
+        if (status == NOTIFY_STATUS_OK) {
+            gCPWToken = token;
+            NSLog(@"[CPWIPC] weather receiver ready token=%d", token);
+        } else {
+            NSLog(@"[CPWIPC] weather receiver failed status=%u", status);
+        }
+    }
+
+    if (!gCPWTestToken) {
+        int token = 0;
+        uint32_t status = notify_register_dispatch(kCPWTestNotify, &token, dispatch_get_main_queue(), ^(int incomingToken) {
+            gCPWTestToken = incomingToken;
+            NSLog(@"[CPWIPC] GOOGLE MAPS TEST EVENT RECEIVED token=%d", incomingToken);
+            CPWShowText(@"GOOGLE MAPS IPC OK", 7.0);
+        });
+        if (status == NOTIFY_STATUS_OK) {
+            gCPWTestToken = token;
+            NSLog(@"[CPWIPC] test receiver ready token=%d", token);
+        } else {
+            NSLog(@"[CPWIPC] test receiver failed status=%u", status);
+        }
     }
 }
 
 %ctor {
     @autoreleasepool {
         if (!CPWIsCarPlayApp()) return;
-        CPWStartReceiver();
+        NSLog(@"[CPWIPC] 16.7 receiver loaded");
+        CPWStartReceivers();
+
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             CPWShowText(@"WEATHER IPC READY", 6.0);
         });
-        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneDidActivateNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                CPWEnsureWindow();
-            });
-        }];
+
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:UISceneDidActivateNotification
+                        object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(__unused NSNotification *note) {
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                            CPWEnsureWindow();
+                        });
+                    }];
     }
 }
