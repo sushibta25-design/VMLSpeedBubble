@@ -14,45 +14,82 @@ static NSString *gGMWDestination = nil;
 static NSString *gGMWLastSentDestination = nil;
 static NSDate *gGMWLastSentAt = nil;
 static int gGMWNotifyToken = 0;
-static BOOL gGMWSenderTestPostedForPhoneScene = NO;
+static BOOL gGMWPhoneProbePosted = NO;
+static BOOL gGMWCarPlayProbePosted = NO;
 
 static BOOL GMWIsGoogleMaps(void) {
     return [NSBundle.mainBundle.bundleIdentifier isEqualToString:kGMWBundle];
 }
 
-static NSArray<UIWindow *> *GMWPhoneWindows(void) {
+static BOOL GMWSceneLooksCarPlay(UIWindowScene *scene) {
+    if (!scene) return NO;
+    NSString *role = scene.session.role ?: @"";
+    if ([role localizedCaseInsensitiveContainsString:@"CarPlay"] ||
+        [role localizedCaseInsensitiveContainsString:@"automotive"]) return YES;
+    return scene.screen && scene.screen != UIScreen.mainScreen;
+}
+
+static NSArray<UIWindow *> *GMWWindowsForPhoneScene(void) {
     NSMutableArray<UIWindow *> *out = [NSMutableArray array];
-    UIApplication *app = UIApplication.sharedApplication;
-    UIScreen *phoneScreen = UIScreen.mainScreen;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in app.connectedScenes) {
-            if (![scene isKindOfClass:UIWindowScene.class]) continue;
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            if (ws.screen != phoneScreen) continue;
-            for (UIWindow *w in ws.windows) {
-                if (w && ![out containsObject:w]) [out addObject:w];
-            }
-        }
+    UIScreen *phone = UIScreen.mainScreen;
+    for (UIScene *raw in UIApplication.sharedApplication.connectedScenes) {
+        if (![raw isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *scene = (UIWindowScene *)raw;
+        if (scene.screen != phone) continue;
+        for (UIWindow *w in scene.windows) if (w && ![out containsObject:w]) [out addObject:w];
+    }
+    return out;
+}
+
+static NSArray<UIWindow *> *GMWWindowsForCarPlayScenes(void) {
+    NSMutableArray<UIWindow *> *out = [NSMutableArray array];
+    for (UIScene *raw in UIApplication.sharedApplication.connectedScenes) {
+        if (![raw isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *scene = (UIWindowScene *)raw;
+        if (!GMWSceneLooksCarPlay(scene)) continue;
+        for (UIWindow *w in scene.windows) if (w && ![out containsObject:w]) [out addObject:w];
     }
     return out;
 }
 
 static BOOL GMWPhoneSceneForegroundActive(void) {
-    UIScreen *phoneScreen = UIScreen.mainScreen;
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class]) continue;
-        UIWindowScene *ws = (UIWindowScene *)scene;
-        if (ws.screen != phoneScreen) continue;
-        if (ws.activationState != UISceneActivationStateForegroundActive) continue;
-        for (UIWindow *w in ws.windows) {
+    UIScreen *phone = UIScreen.mainScreen;
+    for (UIScene *raw in UIApplication.sharedApplication.connectedScenes) {
+        if (![raw isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *scene = (UIWindowScene *)raw;
+        if (scene.screen != phone || scene.activationState != UISceneActivationStateForegroundActive) continue;
+        for (UIWindow *w in scene.windows) {
             if (w && !w.hidden && w.alpha > 0.01 && w.isKeyWindow && w.rootViewController) return YES;
         }
     }
     return NO;
 }
 
+static BOOL GMWCarPlaySceneForegroundActive(void) {
+    for (UIScene *raw in UIApplication.sharedApplication.connectedScenes) {
+        if (![raw isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *scene = (UIWindowScene *)raw;
+        if (!GMWSceneLooksCarPlay(scene) || scene.activationState != UISceneActivationStateForegroundActive) continue;
+        for (UIWindow *w in scene.windows) {
+            if (w && !w.hidden && w.alpha > 0.01 && w.rootViewController) return YES;
+        }
+    }
+    return NO;
+}
+
+static NSArray<UIWindow *> *GMWActiveSourceWindows(void) {
+    NSMutableArray<UIWindow *> *out = [NSMutableArray array];
+    if (GMWPhoneSceneForegroundActive()) {
+        for (UIWindow *w in GMWWindowsForPhoneScene()) if (w && ![out containsObject:w]) [out addObject:w];
+    }
+    if (GMWCarPlaySceneForegroundActive()) {
+        for (UIWindow *w in GMWWindowsForCarPlayScenes()) if (w && ![out containsObject:w]) [out addObject:w];
+    }
+    return out;
+}
+
 static UIWindow *GMWPhoneKeyWindow(void) {
-    for (UIWindow *w in GMWPhoneWindows()) {
+    for (UIWindow *w in GMWWindowsForPhoneScene()) {
         if (!w.hidden && w.alpha > 0.01 && w.isKeyWindow && w.rootViewController) return w;
     }
     return nil;
@@ -69,7 +106,7 @@ static UIView *GMWFind(UIView *root, NSString *className) {
 }
 
 static UIView *GMWVisibleClass(NSString *className) {
-    for (UIWindow *w in GMWPhoneWindows()) {
+    for (UIWindow *w in GMWActiveSourceWindows()) {
         if (w.hidden || w.alpha <= 0.01) continue;
         UIView *found = GMWFind(w, className);
         if (found) return found;
@@ -101,7 +138,9 @@ static void GMWCollectText(UIView *view, NSMutableArray<NSString *> *texts) {
 static NSString *GMWChooseDestination(NSArray<NSString *> *texts) {
     for (NSString *candidate in texts) {
         NSString *lower = candidate.lowercaseString;
-        if ([lower containsString:@"km"] || [lower containsString:@"min"] || [lower containsString:@"phút"] || [lower containsString:@"giờ"] || [lower containsString:@"bắt đầu"] || [lower containsString:@"start"]) continue;
+        if ([lower containsString:@"km"] || [lower containsString:@"min"] ||
+            [lower containsString:@"phút"] || [lower containsString:@"giờ"] ||
+            [lower containsString:@"bắt đầu"] || [lower containsString:@"start"]) continue;
         return candidate;
     }
     return nil;
@@ -138,18 +177,22 @@ static void GMWShowPhoneProbe(void) {
         [[window viewWithTag:916509] removeFromSuperview];
         [window addSubview:label];
         [window bringSubviewToFront:label];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [label removeFromSuperview];
-        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [label removeFromSuperview]; });
     });
 }
 
-static void GMWPostSenderTestIfPhoneForeground(void) {
-    if (gGMWSenderTestPostedForPhoneScene || !GMWPhoneSceneForegroundActive()) return;
-    gGMWSenderTestPostedForPhoneScene = YES;
-    GMWShowPhoneProbe();
-    notify_post(kGMWTestNotify);
-    NSLog(@"[GMWIPC] PHONE foreground sender test posted");
+static void GMWPostSceneProbesIfNeeded(void) {
+    if (GMWPhoneSceneForegroundActive() && !gGMWPhoneProbePosted) {
+        gGMWPhoneProbePosted = YES;
+        GMWShowPhoneProbe();
+        notify_post(kGMWTestNotify);
+        NSLog(@"[GMWIPC] PHONE foreground sender test posted");
+    }
+    if (GMWCarPlaySceneForegroundActive() && !gGMWCarPlayProbePosted) {
+        gGMWCarPlayProbePosted = YES;
+        notify_post(kGMWTestNotify);
+        NSLog(@"[GMWIPC] CARPLAY foreground sender test posted");
+    }
 }
 
 static void GMWPostWeather(double tempC, NSInteger code, double windKmh) {
@@ -168,18 +211,23 @@ static void GMWPostWeather(double tempC, NSInteger code, double windKmh) {
     uint64_t codePacked = (uint64_t)MAX(0, MIN(255, code));
     uint64_t windPacked = (uint64_t)MAX(0, MIN(65535, wind10));
     uint64_t state = tempPacked | (codePacked << 16) | (windPacked << 24);
-    uint32_t setStatus = notify_set_state(gGMWNotifyToken, state);
-    uint32_t postStatus = notify_post(kGMWWeatherNotify);
-    NSLog(@"[GMWIPC] weather posted state=%llu temp=%.1f code=%ld wind=%.1f set=%u post=%u", state, tempC, (long)code, windKmh, setStatus, postStatus);
+    notify_set_state(gGMWNotifyToken, state);
+    notify_post(kGMWWeatherNotify);
+    NSLog(@"[GMWIPC] weather posted state=%llu temp=%.1f code=%ld wind=%.1f", state, tempC, (long)code, windKmh);
 }
 
 static void GMWFetchWeatherIfReady(void) {
-    if (!GMWPhoneSceneForegroundActive()) return;
+    BOOL phone = GMWPhoneSceneForegroundActive();
+    BOOL carplay = GMWCarPlaySceneForegroundActive();
+    if (!phone && !carplay) return;
+
     GMWCaptureDestination();
     BOOL nav = GMWNavigationActive();
-    NSLog(@"[GMWIPC] tick phoneForeground=1 nav=%d destination=%@", nav, gGMWDestination ?: @"<nil>");
+    NSLog(@"[GMWIPC] tick phone=%d carplay=%d nav=%d destination=%@", phone, carplay, nav, gGMWDestination ?: @"<nil>");
     if (!nav || !gGMWDestination.length) return;
-    if ([gGMWDestination isEqualToString:gGMWLastSentDestination] && gGMWLastSentAt && [[NSDate date] timeIntervalSinceDate:gGMWLastSentAt] < 300.0) return;
+
+    if ([gGMWDestination isEqualToString:gGMWLastSentDestination] && gGMWLastSentAt &&
+        [[NSDate date] timeIntervalSinceDate:gGMWLastSentAt] < 300.0) return;
 
     gGMWLastSentDestination = [gGMWDestination copy];
     gGMWLastSentAt = [NSDate date];
@@ -195,20 +243,17 @@ static void GMWFetchWeatherIfReady(void) {
         NSString *urlString = [NSString stringWithFormat:@"https://api.open-meteo.com/v1/forecast?latitude=%.6f&longitude=%.6f&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto", location.coordinate.latitude, location.coordinate.longitude];
         NSURL *url = [NSURL URLWithString:urlString];
         if (!url) return;
-        NSLog(@"[GMWIPC] open-meteo request=%@", urlString);
 
         [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *netError) {
             NSInteger statusCode = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
             NSLog(@"[GMWIPC] open-meteo status=%ld bytes=%lu error=%@", (long)statusCode, (unsigned long)data.length, netError.localizedDescription ?: @"none");
             if (netError || !data) return;
 
-            NSError *jsonError = nil;
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
             NSDictionary *current = [json isKindOfClass:NSDictionary.class] ? json[@"current"] : nil;
             NSNumber *temp = current[@"temperature_2m"];
             NSNumber *code = current[@"weather_code"];
             NSNumber *wind = current[@"wind_speed_10m"];
-            NSLog(@"[GMWIPC] parsed current=%@ jsonError=%@", current, jsonError.localizedDescription ?: @"none");
             if (!temp || !code) return;
             GMWPostWeather(temp.doubleValue, code.integerValue, wind ? wind.doubleValue : 0.0);
         }] resume];
@@ -217,7 +262,7 @@ static void GMWFetchWeatherIfReady(void) {
 
 static void GMWSchedule(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-        GMWPostSenderTestIfPhoneForeground();
+        GMWPostSceneProbesIfNeeded();
         GMWFetchWeatherIfReady();
     });
 }
@@ -225,25 +270,25 @@ static void GMWSchedule(void) {
 %hook UIView
 - (void)didMoveToWindow {
     %orig;
-    if (!GMWIsGoogleMaps() || !self.window || self.window.screen != UIScreen.mainScreen) return;
+    if (!GMWIsGoogleMaps() || !self.window) return;
     NSString *name = NSStringFromClass(self.class);
-    if ([name isEqualToString:kGMWDestinationClass]) {
-        NSLog(@"[GMWIPC] phone class seen=%@", name);
-        GMWCaptureDestination();
+    if ([name isEqualToString:kGMWDestinationClass] ||
+        [name isEqualToString:kGMWNavHeaderClass] ||
+        [name isEqualToString:kGMWNavFooterClass]) {
+        NSLog(@"[GMWIPC] source class=%@ screen=%@", name, self.window.screen);
+        GMWSchedule();
     }
-    if ([name isEqualToString:kGMWDestinationClass] || [name isEqualToString:kGMWNavHeaderClass] || [name isEqualToString:kGMWNavFooterClass]) GMWSchedule();
 }
 %end
 
 %hook UILabel
 - (void)setText:(NSString *)text {
     %orig;
-    if (!GMWIsGoogleMaps() || !self.window || self.window.screen != UIScreen.mainScreen) return;
+    if (!GMWIsGoogleMaps() || !self.window) return;
     UIView *v = self;
     while (v) {
         if ([NSStringFromClass(v.class) isEqualToString:kGMWDestinationClass]) {
-            NSLog(@"[GMWIPC] phone preview label=%@", text ?: @"");
-            GMWCaptureDestination();
+            NSLog(@"[GMWIPC] preview label=%@ screen=%@", text ?: @"", self.window.screen);
             GMWSchedule();
             break;
         }
@@ -255,26 +300,24 @@ static void GMWSchedule(void) {
 %ctor {
     @autoreleasepool {
         if (!GMWIsGoogleMaps()) return;
-        NSLog(@"[GMWIPC] 16.9 sender loaded bundle=%@", NSBundle.mainBundle.bundleIdentifier ?: @"");
+        NSLog(@"[GMWIPC] 16.10 sender loaded bundle=%@", NSBundle.mainBundle.bundleIdentifier ?: @"");
 
-        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                GMWPostSenderTestIfPhoneForeground();
+        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneDidActivateNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                GMWPostSceneProbesIfNeeded();
                 GMWFetchWeatherIfReady();
             });
         }];
 
-        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneDidActivateNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 700 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                GMWPostSenderTestIfPhoneForeground();
-                GMWFetchWeatherIfReady();
-            });
+        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneWillDeactivateNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *note) {
+            if (!GMWPhoneSceneForegroundActive()) gGMWPhoneProbePosted = NO;
+            if (!GMWCarPlaySceneForegroundActive()) gGMWCarPlayProbePosted = NO;
         }];
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            GMWPostSenderTestIfPhoneForeground();
+            GMWPostSceneProbesIfNeeded();
             [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(__unused NSTimer *timer) {
-                GMWPostSenderTestIfPhoneForeground();
+                GMWPostSceneProbesIfNeeded();
                 GMWFetchWeatherIfReady();
             }];
         });
