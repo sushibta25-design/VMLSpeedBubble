@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.4-phone-weather-debug1
+Version: 16.5-carplay-weather-debug1
 Architecture: iphoneos-arm64e
-Description: Google Maps phone weather debug build with destination caching, navigation state logging, CLGeocoder/Open-Meteo diagnostics, banner and Vietnamese speech.
+Description: Google Maps destination weather debug build that targets the CarPlay scene/window, with destination caching, Open-Meteo, Vietnamese speech and CarPlay diagnostics.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
