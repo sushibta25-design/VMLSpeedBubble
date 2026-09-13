@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 15.4
+Version: 16.1-phone-diag1
 Architecture: iphoneos-arm64e
-Description: VML Speed Bubble V15.4 - responsive centered overspeed fuel alert banner; yellow/blue 0.5s synchronized flashing with bright-red full-screen SOS and instant hide when overspeed ends.
+Description: VML Speed Bubble plus phone-only Google Maps destination diagnostics for the weather-at-destination feature.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
