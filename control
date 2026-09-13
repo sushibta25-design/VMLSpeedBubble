@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.9-carplay-weather-phoneforeground1
+Version: 16.10-carplay-scene-sender1
 Architecture: iphoneos-arm64e
-Description: CarPlay weather IPC build that distinguishes Google Maps phone foreground UI from CarPlay-launched background/prewarmed process and captures destination only from the iPhone scene.
+Description: Google Maps weather IPC sender supports both foreground iPhone UI and foreground Google Maps CarPlay scenes, while CarPlayApp remains the dedicated overlay receiver.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
