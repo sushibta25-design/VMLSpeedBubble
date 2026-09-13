@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.6-carplay-weather-ipc1
+Version: 16.7-carplay-weather-senderdebug1
 Architecture: iphoneos-arm64e
-Description: Google Maps destination weather sent by Darwin notify IPC to a dedicated CarPlayApp overlay receiver.
+Description: CarPlay weather IPC debug build with explicit Google Maps sender test, destination capture diagnostics and Open-Meteo logging.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
