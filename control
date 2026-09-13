@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.7-carplay-weather-senderdebug1
+Version: 16.8-carplay-weather-injectprobe1
 Architecture: iphoneos-arm64e
-Description: CarPlay weather IPC debug build with explicit Google Maps sender test, destination capture diagnostics and Open-Meteo logging.
+Description: Google Maps injection probe plus CarPlay weather IPC diagnostics and destination weather sender.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
