@@ -1,8 +1,8 @@
 Package: com.sushibta.vmlspeedbubble
 Name: VMLSpeedBubble
-Version: 16.12-templatehost-probe1
+Version: 16.13-templatehost-weather1
 Architecture: iphoneos-arm64e
-Description: Probe build for com.apple.CarPlayTemplateUIHost to inspect Google Maps full-screen CarPlay template hierarchy, text and accessibility data.
+Description: Google Maps CarPlay weather build that caches destination from CPSPagingTripPreviewsCardView inside CarPlayTemplateUIHost, detects active navigation via CPSNavigationETAView, geocodes the destination, fetches Open-Meteo current weather and sends it to the CarPlay overlay receiver.
 Maintainer: sushibta25-design
 Author: sushibta25-design
 Section: Tweaks
